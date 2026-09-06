@@ -27,11 +27,14 @@ dissonanza/
 │       └── roon/
 │           ├── mod.rs           # pub mod connection;
 │           └── connection/      # sole owner of Core discovery/pairing/keepalive (CLAUDE.md §1)
-│               ├── mod.rs           # mod sood; (private — not a public surface yet)
-│               └── sood/            # private: SOOD discovery, never `pub`
+│               ├── mod.rs           # mod sood; mod moo; (private — not a public surface yet)
+│               ├── sood/            # private: SOOD discovery, never `pub`
+│               │   ├── mod.rs
+│               │   ├── message.rs   # SoodMessage/SoodMessageType/SoodError — TLV codec, pure parsing
+│               │   └── discovery.rs # per-interface multicast sockets, query cadence, dedupe by unique_id
+│               └── moo/             # private: MOO websocket protocol, never `pub`
 │                   ├── mod.rs
-│                   ├── message.rs   # SoodMessage/SoodMessageType/SoodError — TLV codec, pure parsing
-│                   └── discovery.rs # per-interface multicast sockets, query cadence, dedupe by unique_id
+│                   └── message.rs   # MooMessage/MooVerb/MooBody/MooError — message framing, pure parsing
 ├── app/                  # `dissonanza` crate (binary) — Slint UI shell, depends on core's public API
 │   └── src/
 │       └── main.rs           # trivial placeholder, no Slint wired up yet
@@ -64,16 +67,21 @@ dissonanza/
     dedupe by `unique_id`, `_replyaddr`/`_replyport` override. Exposes `run(...)`, not yet called by
     anything — wiring it into a `Connection` state machine that also owns MOO pairing and knows when
     to stop discovering (Core paired) is separate, not-yet-started work.
-  - `moo` (MOO websocket transport/handshake) — not started.
+  - `moo::message` — MOO message framing (`MooMessage`, `MooVerb`, `MooBody`, `MooError`).
+    Parses/encodes the header-block + blank-line + body wire format: `Request-Id` extraction,
+    `Content-Length`/`Content-Type` cross-validation, JSON vs. raw-bytes body handling. Pure,
+    no I/O. `moo::transport` (websocket connect, WS ping/pong) and `moo::handshake`
+    (registry/pairing/ping) not started.
 
 ## Open work
 
 - `core::roon::connection` implementation in progress on `feature/roon-connection-core` (branched from
-  a new `develop`, per CLAUDE.md's git workflow): SOOD TLV parsing and the SOOD multicast discovery
-  loop are done (see Modules above). Still to build: MOO websocket framing/transport, the
-  registry/pairing/ping handshake, the app-level keepalive on top of `core_paired`/`core_unpaired`,
-  reconnect-on-disconnect, and the public `Connection` API tying it all together — none of these are
-  wired up yet, and `sood::discovery::run` itself isn't called by anything yet.
+  a new `develop`, per CLAUDE.md's git workflow): SOOD TLV parsing, the SOOD multicast discovery
+  loop, and MOO message framing are done (see Modules above). Still to build: the MOO websocket
+  transport (connect + WS ping/pong), the registry/pairing/ping handshake, the app-level keepalive on
+  top of `core_paired`/`core_unpaired`, reconnect-on-disconnect, and the public `Connection` API tying
+  it all together — none of these are wired up yet, and `sood::discovery::run`/`moo::message` aren't
+  called by anything yet.
   - ~~Custom Rust SOOD/MOO protocol implementation needs its own wire-protocol study~~ — **done**, see
     [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md): packet/message formats, the
     connection/registration/pairing handshake, and the keepalive rationale behind CLAUDE.md §1,
@@ -93,6 +101,12 @@ dissonanza/
 
 ## Recently changed
 
+- Added MOO message framing (2026-09-06): `core::roon::connection::moo::message` (`MooMessage`,
+  `MooVerb`, `MooBody`, `MooError`) parses/encodes the MOO wire format from
+  [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md) — header block, `Request-Id`,
+  `Content-Length`/`Content-Type` cross-validation, JSON vs. raw-bytes body. Pure parsing, no I/O;
+  not wired into a websocket yet. Added `serde_json` to `core`'s dependencies for JSON body
+  handling.
 - Added the SOOD multicast discovery loop (2026-09-06): `core::roon::connection::sood::discovery`
   (`if-addrs` for interface enumeration, `socket2` for per-interface multicast socket setup, `tokio`
   for the async loop) — per-interface sockets, 5s re-enumeration, 10s×6-then-60s query cadence, dedupe
