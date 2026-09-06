@@ -34,7 +34,8 @@ dissonanza/
 │               │   └── discovery.rs # per-interface multicast sockets, query cadence, dedupe by unique_id
 │               └── moo/             # private: MOO websocket protocol, never `pub`
 │                   ├── mod.rs
-│                   └── message.rs   # MooMessage/MooVerb/MooBody/MooError — message framing, pure parsing
+│                   ├── message.rs   # MooMessage/MooVerb/MooBody/MooError — message framing, pure parsing
+│                   └── transport.rs # websocket connect, MOO frame send/receive, WS ping/pong keepalive
 ├── app/                  # `dissonanza` crate (binary) — Slint UI shell, depends on core's public API
 │   └── src/
 │       └── main.rs           # trivial placeholder, no Slint wired up yet
@@ -70,17 +71,23 @@ dissonanza/
   - `moo::message` — MOO message framing (`MooMessage`, `MooVerb`, `MooBody`, `MooError`).
     Parses/encodes the header-block + blank-line + body wire format: `Request-Id` extraction,
     `Content-Length`/`Content-Type` cross-validation, JSON vs. raw-bytes body handling. Pure,
-    no I/O. `moo::transport` (websocket connect, WS ping/pong) and `moo::handshake`
-    (registry/pairing/ping) not started.
+    no I/O.
+  - `moo::transport` — the MOO websocket transport (`tokio-tungstenite`): connects to
+    `ws://<addr>/api`, encodes/sends outbound `MooMessage`s and decodes/forwards inbound ones as
+    binary WS frames over `mpsc` channels, and runs an application-level WS ping every
+    (caller-supplied) interval, closing the connection if a pong is missed. A framing violation
+    (malformed MOO bytes, or a text frame) ends the loop immediately rather than resyncing.
+    Exposes `run(...)`, not yet called by anything. `moo::handshake` (registry/pairing/ping) not
+    started.
 
 ## Open work
 
 - `core::roon::connection` implementation in progress on `feature/roon-connection-core` (branched from
   a new `develop`, per CLAUDE.md's git workflow): SOOD TLV parsing, the SOOD multicast discovery
-  loop, and MOO message framing are done (see Modules above). Still to build: the MOO websocket
-  transport (connect + WS ping/pong), the registry/pairing/ping handshake, the app-level keepalive on
-  top of `core_paired`/`core_unpaired`, reconnect-on-disconnect, and the public `Connection` API tying
-  it all together — none of these are wired up yet, and `sood::discovery::run`/`moo::message` aren't
+  loop, MOO message framing, and the MOO websocket transport are done (see Modules above). Still to
+  build: the registry/pairing/ping handshake, the app-level keepalive on top of
+  `core_paired`/`core_unpaired`, reconnect-on-disconnect, and the public `Connection` API tying it all
+  together — none of these are wired up yet, and `sood::discovery::run`/`moo::transport::run` aren't
   called by anything yet.
   - ~~Custom Rust SOOD/MOO protocol implementation needs its own wire-protocol study~~ — **done**, see
     [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md): packet/message formats, the
@@ -101,6 +108,14 @@ dissonanza/
 
 ## Recently changed
 
+- Added the MOO websocket transport (2026-09-06): `core::roon::connection::moo::transport`
+  (`tokio-tungstenite` + `futures-util` for the split sink/stream) — connects to
+  `ws://<addr>/api`, ferries `MooMessage`s to/from binary WS frames over `mpsc` channels, and
+  runs an application-level ping/pong keepalive (caller-supplied interval; missed pong closes
+  the connection). Framing violations end the loop rather than resyncing. Tested against an
+  in-process mock WS server (`tokio_tungstenite::accept_async`). Added `tokio-tungstenite`,
+  `futures-util`, and `bytes` to `core`'s dependencies. Not wired into a connection state
+  machine yet.
 - Added MOO message framing (2026-09-06): `core::roon::connection::moo::message` (`MooMessage`,
   `MooVerb`, `MooBody`, `MooError`) parses/encodes the MOO wire format from
   [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md) — header block, `Request-Id`,
