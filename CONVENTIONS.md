@@ -27,7 +27,7 @@ Cargo workspace, split by concern:
 ```
 dissonanza/
 ├── Cargo.toml   # workspace root
-├── core/        # Roon protocol (MOO/SOOD), rating store (rusqlite), business logic — no GUI deps
+├── core/        # Roon protocol (MOO/SOOD), business logic — no GUI deps
 └── app/         # Slint UI shell, wiring to core
 ```
 
@@ -35,7 +35,7 @@ dissonanza/
 
 ## Testing
 
-`cargo test` for unit/integration tests (see TECH_STACK.md). Every new `core` module (protocol parsing, rating store, discovery) needs unit tests. No UI/GUI test framework yet — see TECH_STACK.md's Testing section for when that gets added. No snapshot tests.
+`cargo test` for unit/integration tests (see TECH_STACK.md). Every new `core` module (protocol parsing, discovery) needs unit tests. No UI/GUI test framework yet — see TECH_STACK.md's Testing section for when that gets added. No snapshot tests.
 
 ## Style
 
@@ -43,7 +43,7 @@ No `unwrap()`/`expect()` outside test code — production code paths must handle
 
 ## Error handling
 
-`thiserror` for typed domain errors in `core` (e.g. a `RoonError`, a `RatingStoreError`) — every error variant must be matchable, never just a string. `anyhow` at the `app`-crate boundary, where an error just needs to surface to logs or the UI without further matching.
+`thiserror` for typed domain errors in `core` (e.g. a `RoonError`, a `CacheError`) — every error variant must be matchable, never just a string. `anyhow` at the `app`-crate boundary, where an error just needs to surface to logs or the UI without further matching.
 
 ## Review bar
 

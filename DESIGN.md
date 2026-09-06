@@ -4,12 +4,12 @@ Everything visual: UI, GUI, and UX. What the product looks like, and which visua
 
 **Source of truth: Roon's own official app UI**, sampled from user-supplied screenshots (light and dark) — not a Figma file or independent mockup. Values in this file are measured from those screenshots, not eyeballed; a mismatch is a bug report, not a style debate.
 
-This product also has surfaces Roon's official app doesn't have at all: zoomable tile/grid view, list+detail view, and the 5-star rating control. These have no screenshot to sample directly — they must still be built from the same tokens/patterns sampled from Roon's real screens below, so they read as if Roon shipped them itself, not as a bolted-on skin.
+This product also has surfaces Roon's official app doesn't have at all: zoomable tile/grid view and list+detail view. These have no screenshot to sample directly — they must still be built from the same tokens/patterns sampled from Roon's real screens below, so they read as if Roon shipped them itself, not as a bolted-on skin.
 
 ## Visual language
 
 - Both light and dark themes are first-class from day one, not a "dark mode later" afterthought. Unlike Roon's own app (which requires a restart to apply a theme change), theme switching in this app must happen live, at runtime — no restart.
-- New surfaces without a Roon equivalent (zoom/tile view, list+detail view, star rating) reuse the same tokens, spacing, and type rules sampled from Roon's real screens — never a separate "our own feature" visual style.
+- New surfaces without a Roon equivalent (zoom/tile view, list+detail view) reuse the same tokens, spacing, and type rules sampled from Roon's real screens — never a separate "our own feature" visual style.
 - GPU-accelerated, virtualized grid/list rendering (via Slint, see TECH_STACK.md) for smooth scrolling through thousands of tiles — this is a hard requirement, not a nice-to-have, given the target library sizes.
 - Art is requested at the resolution the moment needs (small thumbnails in a dense grid, large images when zoomed in), re-fetching the same `image_key` at a larger `width`/`height` rather than upscaling a cached thumbnail.
 
@@ -44,11 +44,11 @@ Two primary content-view modes, per decision in the research doc:
 
 Sidebar categories mirror Roon's own sidebar structure (genres, Tidal, live radio, listen later, tags, history, albums, artists, tracks, composers, compositions, my live radio, folders, playlists) — concrete layout TBD pending screenshots.
 
-A separate, app-owned settings screen (not Roon Core's settings) covers: Roon Core connection, MusicBrainz, Last.fm, view settings, and the light/dark mode toggle. Concrete layout TBD pending screenshots.
+A separate, app-owned settings screen (not Roon Core's settings) covers: Roon Core connection, Last.fm, view settings, and the light/dark mode toggle. Concrete layout TBD pending screenshots.
 
 ## Components
 
-- **Star rating control** — 5 stars, half-star granularity. No Roon or Last.fm equivalent exists; this is a net-new component and must still visually blend with the sampled Roon tokens (see Visual language). States: empty / half / full per star, hover-preview, selected. Sits alongside a separate binary Last.fm love/unlove toggle — the two are visually distinct controls, not merged into one.
+- **Love/unlove toggle** — binary, surfaces Roon's own native track-love control exactly as Roon presents it (no star/half-star granularity). Roon already syncs this to Last.fm on its own, so no app-side rating storage or matching logic is needed. Since it has a direct Roon equivalent, sample its visual treatment from screenshots like any other Roon-parity control (see Visual language) — unlike the genuinely new zoom/list surfaces, this isn't a net-new style to invent.
 - **Grid tile** — art + zoom-responsive sizing (see Layout).
 - **List row** — art thumbnail + extra info fields (see Layout).
 - **Theme toggle** — must apply instantly, no restart (see Visual language).
@@ -57,7 +57,7 @@ Full default/hover/focus/disabled states per component: TBD pending screenshots.
 
 ## Icons
 
-Hand-rolled inline SVG — the icon set is small and fixed (playback controls, star states, love/unlove, zoom in/out, grid/list toggle, settings, sidebar categories). No icon-library dependency. Revisit only if a later phase needs a materially broader icon set.
+Hand-rolled inline SVG — the icon set is small and fixed (playback controls, love/unlove, zoom in/out, grid/list toggle, settings, sidebar categories). No icon-library dependency. Revisit only if a later phase needs a materially broader icon set.
 
 Concrete inventory: TBD, finalized once the component list above is locked down.
 
@@ -69,7 +69,7 @@ Art rendering depends on `node-roon-api-image`'s `scale`/`width`/`height`/`forma
 
 - Every interactive element keyboard-reachable, in an order matching visual order.
 - Focus visible via more than a color change alone (pair with an outline/glow) — in both themes.
-- Color is never the sole signal for state (e.g. star-rating fill, love/unlove) — pair with shape or icon change.
+- Color is never the sole signal for state (e.g. love/unlove) — pair with shape or icon change.
 - Contrast checked in both light and dark themes independently — passing one theme doesn't imply the other passes.
 
 ## Checklist for new UI

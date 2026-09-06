@@ -11,7 +11,7 @@ command: dissonanza
 # - ipc + dri: required for GPU-accelerated rendering (Slint's renderer, see TECH_STACK.md).
 # - wayland + fallback-x11: Wayland-primary per the research doc's decisions, X11 still works.
 # No filesystem permissions: this app never reads music files directly (control-plane only,
-# see NORTH-STAR.md) — its own config/cache/SQLite rating store lives in the app's private
+# see NORTH-STAR.md) — its own config/cache (SQLite) lives in the app's private
 # Flatpak data directory automatically, no extra permission needed.
 finish-args:
   - --share=network

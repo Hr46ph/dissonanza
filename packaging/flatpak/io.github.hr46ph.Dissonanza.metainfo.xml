@@ -12,8 +12,7 @@
       Dissonanza is a native Linux remote client for Roon, built entirely on Roon's
       officially supported API. It aims for feature parity with the official Roon
       remote — every sidebar category, browse path, and playback control — plus a
-      few things Roon itself doesn't offer: fine-grained 5-star track ratings and a
-      zoomable tile/grid browsing view.
+      few things Roon itself doesn't offer: a zoomable tile/grid browsing view.
     </p>
   </description>
 

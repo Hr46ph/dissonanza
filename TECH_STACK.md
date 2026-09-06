@@ -14,7 +14,7 @@ Slint's desktop platform support is officially "in progress" upstream, but judge
 
 ## Data / storage
 
-`rusqlite` (SQLite) for local cache metadata and track ratings.
+`rusqlite` (SQLite) for local cache metadata (e.g. album art cache).
 
 ## Testing
 

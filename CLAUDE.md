@@ -30,7 +30,7 @@ Every task passes through two gates before implementation starts.
 
 ## How this codebase works
 
-A Cargo workspace with two crates: `core/` (Roon MOO/SOOD protocol client, the SQLite rating store, all business logic — no GUI dependency) and `app/` (the Slint GUI shell, depends on `core`'s public API only). No code exists yet — see [CURRENT_STATE.md](CURRENT_STATE.md).
+A Cargo workspace with two crates: `core/` (Roon MOO/SOOD protocol client, all business logic — no GUI dependency) and `app/` (the Slint GUI shell, depends on `core`'s public API only). No code exists yet — see [CURRENT_STATE.md](CURRENT_STATE.md).
 
 ## How the agent should work
 
@@ -51,7 +51,6 @@ A Cargo workspace with two crates: `core/` (Roon MOO/SOOD protocol client, the S
 - Never reach into Roon's internal/unofficial protocol surface (Settings, Audio Setup, Zone config, DSP engine). Only the officially-supported API modules are in scope, full stop — see NORTH-STAR.md's non-goals.
 - On Roon Core disconnect, wait for a new SOOD discovery event rather than retrying the last known address.
 - Maintain an app-level keepalive/health-check on top of Roon's `core_paired`/`core_unpaired` events — that pair is known to not always fire `core_unpaired` correctly on its own.
-- Locally stored track ratings must never be lost, under any scenario (crash, disconnect, migration, multi-Core switch). Treat the rating store's durability bar as stricter than other local state.
 
 ## Architectural Contracts
 
@@ -63,13 +62,7 @@ effect). Number each contract so it can be referenced elsewhere as `CLAUDE.md §
 the same non-negotiable weight as CONVENTIONS.md — reject a task that conflicts with one, the same way
 CONVENTIONS.md says to reject a task that conflicts with it.
 
-#### 1. The Rating Store
-The `core::rating` module is the sole owner of local track-rating state (SQLite via `rusqlite`). Nothing
-outside this module — not `app`, not a future sync mechanism — may write ratings directly. Track-identity
-keying (file path vs. MusicBrainz ID vs. Roon `item_key`) is an open design question (see
-CURRENT_STATE.md); keeping a single write path means that decision can change without callers noticing.
-
-#### 2. The Roon Connection
+#### 1. The Roon Connection
 The `core::roon::connection` module is the sole owner of Core discovery and connection state: SOOD
 discovery, `core_paired`/`core_unpaired` handling, the keepalive/health-check layered on top, and
 reconnect-on-disconnect logic. Nothing outside this module calls SOOD or reacts to pairing events

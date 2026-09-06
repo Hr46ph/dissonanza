@@ -21,7 +21,7 @@ Commit messages (see CLAUDE.md's Git workflow) use a `type(scope): subject` pref
 | `feat!:` / `fix!:` / `BREAKING CHANGE:` footer | minor | major |
 | `refactor:`, `test:`, `docs:`, `build:`, `ci:`, `style:`, `chore:`, `revert:` | no release | no release |
 
-Optional scope in parens, mirroring the workspace split: `feat(core): ...`, `fix(app): ...`, or finer (`core/rating`, `core/roon`, `ci`, `packaging`, `docs`). Scope doesn't affect the bump, just helps readers.
+Optional scope in parens, mirroring the workspace split: `feat(core): ...`, `fix(app): ...`, or finer (`core/cache`, `core/roon`, `ci`, `packaging`, `docs`). Scope doesn't affect the bump, just helps readers.
 
 ## Changelog
 
