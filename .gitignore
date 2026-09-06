@@ -15,8 +15,6 @@ target
 
 # Claude Code config, project instructions, and plan/design docs
 /.claude/
-/CLAUDE.md
-/DESIGN.md
 /implementation-plan.md
 /docs/
 
