@@ -1,0 +1,7 @@
+[package]
+name = "dissonanza"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dissonanza-core = { path = "../core" }
