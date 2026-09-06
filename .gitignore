@@ -16,6 +16,7 @@ target
 # Claude Code config, project instructions, and plan/design docs
 /.claude/
 /implementation-plan.md
+/IMPL_*.md
 /docs/*
 # ...except protocol reference studies, which are durable engineering docs, not scratch notes
 !/docs/protocol/
