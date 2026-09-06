@@ -38,6 +38,12 @@ A Cargo workspace with two crates: `core/` (Roon MOO/SOOD protocol client, the S
 - Update [CURRENT_STATE.md](CURRENT_STATE.md) when you finish or open work that materially changes the module map, file structure, or status of open work.
 - Always run `cargo check`, `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt --check` before considering a task done — see CONVENTIONS.md's Review bar.
 
+## Git workflow
+
+- Branch model: `main` is stable. Once actual coding work starts, `develop` becomes the integration branch holding the initial groundwork. Feature/phase branches branch off `develop` and merge back into it when finished.
+- Small, incremental commits (the common case): concise, functional commit messages, imperative mood (e.g. "Add SOOD discovery retry") — no `Co-Authored-By` trailer.
+- Merge commits from a finished feature/phase branch into `develop` may include the `Co-Authored-By: Claude Sonnet 5` trailer — that's the only place it belongs, not on every small commit along the way.
+
 ## Mandatory technical choices
 
 - Never hardcode a Roon Core's IP/port. Always rediscover via SOOD — the port isn't fixed and can change.
