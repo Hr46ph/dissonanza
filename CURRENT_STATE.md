@@ -11,6 +11,7 @@ No Rust or Slint code exists yet — the repository is currently documentation/s
 ```
 dissonanza/
 ├── CLAUDE.md           # agent operating instructions
+├── cliff.toml          # git-cliff config: generates CHANGELOG.md from Conventional Commits
 ├── CONTEXT.md          # debugging memory, written only on explicit instruction
 ├── CONVENTIONS.md      # engineering conventions
 ├── COPY.md             # tone/voice/terminology
@@ -21,7 +22,7 @@ dissonanza/
 ├── TECH_STACK.md       # chosen stack
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml       # format/lint/test on every push/PR
+│       ├── ci.yml       # format/lint/test on every push/PR, version-bump guardrail on PRs into main
 │       └── release.yml  # binary build, Flatpak validation, GitHub Release, AUR push on tag
 ├── packaging/
 │   ├── flatpak/
@@ -55,3 +56,4 @@ None yet — no code has been written.
 ## Recently changed
 
 - Project scaffolding filled in: TECH_STACK.md, NORTH-STAR.md, DESIGN.md, CURRENT_STATE.md, CONVENTIONS.md, COPY.md, and CLAUDE.md's open sections, drafted from `docs/roon-linux-remote-client-onderzoek.md` plus follow-up decisions with the user (2026-09-06). CONTEXT.md intentionally left untouched (only ever written on explicit instruction).
+- Standardized versioning, changelog, and release-cutting (2026-09-06): Conventional Commits adopted for all commit messages (RELEASES.md's Conventional Commits section, referenced from CLAUDE.md's Git workflow); SemVer with an explicit pre-1.0 bump rule; `git-cliff` (`cliff.toml`) generates `CHANGELOG.md`, `cargo-release` drives the version bump as one deliberate, human-run command on `main` — never automatic on push. `release.yml`'s GitHub Release body now comes from that generated CHANGELOG.md section instead of GitHub's auto-generated notes. `ci.yml` gained a guardrail job failing PRs into `main` that don't bump the workspace version. Motivated by a versioning mistake observed in another project (`~/git/wiki-md`): automatic per-push version bumps produced a messy, duplicated release/changelog history instead of curated releases.

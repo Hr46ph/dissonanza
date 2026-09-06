@@ -41,8 +41,9 @@ A Cargo workspace with two crates: `core/` (Roon MOO/SOOD protocol client, the S
 ## Git workflow
 
 - Branch model: `main` is stable. Once actual coding work starts, `develop` becomes the integration branch holding the initial groundwork. Feature/phase branches branch off `develop` and merge back into it when finished.
-- Small, incremental commits (the common case): concise, functional commit messages, imperative mood (e.g. "Add SOOD discovery retry") — no `Co-Authored-By` trailer.
-- Merge commits from a finished feature/phase branch into `develop` may include the `Co-Authored-By: Claude Sonnet 5` trailer — that's the only place it belongs, not on every small commit along the way.
+- Small, incremental commits (the common case): [Conventional Commits](https://www.conventionalcommits.org/) prefix, concise and functional, imperative mood (e.g. `feat(core): add SOOD discovery retry`) — no `Co-Authored-By` trailer. Prefix table and scopes: see [RELEASES.md](RELEASES.md)'s Conventional Commits section.
+- Merge commits from a finished feature/phase branch into `develop` may include the `Co-Authored-By: Claude Sonnet 5` trailer — that's the only place it belongs, not on every small commit along the way. Same Conventional Commits prefix applies to the merge commit's summary line.
+- Version bumping and tagging happen only on `main`, only via the deliberate `cargo release` step described in RELEASES.md's Release flow — never automatically on push. See RELEASES.md for the full process and the reason it must stay manual.
 
 ## Mandatory technical choices
 

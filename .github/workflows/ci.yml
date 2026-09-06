@@ -43,3 +43,35 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  version-bump-check:
+    # Guardrail against RELEASES.md's core rule: version bumps must be a deliberate
+    # `cargo release` step, but it's still easy to forget before merging into main.
+    # This only checks the number moved — it doesn't bump anything itself.
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check workspace version was bumped since the last release tag
+        run: |
+          if [ ! -f Cargo.toml ]; then
+            echo "No Cargo workspace yet — skipping (see RELEASES.md's known gaps)."
+            exit 0
+          fi
+
+          last_tag=$(git describe --tags --abbrev=0 --match 'v*.*.*' 2>/dev/null || echo "")
+          if [ -z "$last_tag" ]; then
+            echo "No prior release tag — skipping (first release)."
+            exit 0
+          fi
+
+          current_version=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+          last_version="${last_tag#v}"
+          if [ "$current_version" = "$last_version" ]; then
+            echo "::error::Cargo.toml version ($current_version) matches the last release tag ($last_tag). Bump it via 'cargo release' (see RELEASES.md) before merging into main."
+            exit 1
+          fi
+          echo "OK: workspace version $current_version differs from last release $last_tag"
