@@ -16,7 +16,9 @@ target
 # Claude Code config, project instructions, and plan/design docs
 /.claude/
 /implementation-plan.md
-/docs/
+/docs/*
+# ...except protocol reference studies, which are durable engineering docs, not scratch notes
+!/docs/protocol/
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
