@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Dissonanza
+Comment=A native Linux client for Roon
+Exec=dissonanza
+Icon=io.github.hr46ph.Dissonanza
+Categories=AudioVideo;Audio;Player;
+Terminal=false

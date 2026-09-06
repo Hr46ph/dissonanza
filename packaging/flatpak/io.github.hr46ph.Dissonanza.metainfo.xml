@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.hr46ph.Dissonanza</id>
+  <name>Dissonanza</name>
+  <summary>A native Linux client for Roon</summary>
+
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+
+  <description>
+    <p>
+      Dissonanza is a native Linux remote client for Roon, built entirely on Roon's
+      officially supported API. It aims for feature parity with the official Roon
+      remote — every sidebar category, browse path, and playback control — plus a
+      few things Roon itself doesn't offer: fine-grained 5-star track ratings and a
+      zoomable tile/grid browsing view.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.hr46ph.Dissonanza.desktop</launchable>
+  <content_rating type="oars-1.1" />
+
+  <url type="homepage">https://github.com/Hr46ph/dissonanza</url>
+  <developer_name>Hr46ph</developer_name>
+
+  <!-- TODO: add <screenshots> once the UI exists — Flathub review requires at least one. -->
+
+  <releases>
+    <release version="0.1.0" date="TODO">
+      <description>
+        <p>TODO: first release notes.</p>
+      </description>
+    </release>
+  </releases>
+</component>

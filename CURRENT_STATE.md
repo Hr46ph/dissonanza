@@ -10,14 +10,26 @@ No Rust or Slint code exists yet — the repository is currently documentation/s
 
 ```
 dissonanza/
-├── CLAUDE.md           # agent operating instructions (local-only, gitignored)
+├── CLAUDE.md           # agent operating instructions
 ├── CONTEXT.md          # debugging memory, written only on explicit instruction
 ├── CONVENTIONS.md      # engineering conventions
 ├── COPY.md             # tone/voice/terminology
 ├── CURRENT_STATE.md    # this file
-├── DESIGN.md           # visual/UX spec (local-only, gitignored)
+├── DESIGN.md           # visual/UX spec
 ├── NORTH-STAR.md       # long-term vision
+├── RELEASES.md         # versioning/release/CI/packaging process
 ├── TECH_STACK.md       # chosen stack
+├── .github/
+│   └── workflows/
+│       ├── ci.yml       # format/lint/test on every push/PR
+│       └── release.yml  # binary build, Flatpak validation, GitHub Release, AUR push on tag
+├── packaging/
+│   ├── flatpak/
+│   │   ├── io.github.hr46ph.Dissonanza.yml            # Flatpak manifest (draft, see RELEASES.md gaps)
+│   │   ├── io.github.hr46ph.Dissonanza.desktop         # desktop entry
+│   │   └── io.github.hr46ph.Dissonanza.metainfo.xml    # AppStream metadata (draft)
+│   └── aur/
+│       └── PKGBUILD    # AUR package recipe (draft, checksums pending a real tag)
 ├── docs/
 │   └── roon-linux-remote-client-onderzoek.md   # original research notes (Dutch); source for the files above
 └── README.md
@@ -35,6 +47,10 @@ None yet — no code has been written.
 - Custom Rust SOOD/MOO protocol implementation needs its own reverse-engineering/documentation study — no existing crate is being relied on.
 - Cache invalidation strategy for locally cached album art (when to refresh on a new Roon scan or changed art) undecided.
 - DESIGN.md's color tokens, typography scale, and concrete component states are marked TBD pending user-supplied screenshots of Roon's official UI.
+- CI (`ci.yml`) will fail until the Cargo workspace exists — expected, not a bug, per RELEASES.md.
+- Flatpak submission is blocked on making the repo public (currently private, see TECH_STACK.md) and on generating `cargo-sources.json` once real dependencies are locked in.
+- AUR push in `release.yml` is scaffolded but inert until `AUR_SSH_PRIVATE_KEY`/`AUR_USERNAME`/`AUR_EMAIL` secrets are configured, and until the package is claimed on AUR with a first manual push.
+- `PKGBUILD` checksums are placeholders (`SKIP`) until a real `v0.1.0` tag exists.
 
 ## Recently changed
 

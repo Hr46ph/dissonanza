@@ -1,0 +1,32 @@
+# Maintainer: Hr46ph
+pkgname=dissonanza
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A native Linux client for Roon"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Hr46ph/dissonanza"
+license=('MIT')
+depends=('gcc-libs' 'glibc') # TODO: verify against Slint's actual runtime deps once the app builds
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/Hr46ph/dissonanza/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP') # TODO: replace with the real checksum once v0.1.0 is tagged
+
+build() {
+    cd "$pkgname-$pkgver"
+    cargo build --release --locked --workspace
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    cargo test --release --locked --workspace
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+    install -Dm644 "packaging/flatpak/io.github.hr46ph.Dissonanza.desktop" \
+        "$pkgdir/usr/share/applications/io.github.hr46ph.Dissonanza.desktop"
+    install -Dm644 "packaging/flatpak/io.github.hr46ph.Dissonanza.metainfo.xml" \
+        "$pkgdir/usr/share/metainfo/io.github.hr46ph.Dissonanza.metainfo.xml"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

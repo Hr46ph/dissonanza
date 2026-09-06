@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-binary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies (Slint build/runtime deps)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfontconfig1-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libinput-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --workspace
+
+      - name: Package binary
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          tar -czf "dist/dissonanza-${tag}-x86_64-linux.tar.gz" \
+            -C target/release dissonanza
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dissonanza-linux-binary
+          path: dist/*.tar.gz
+
+  validate-flatpak:
+    runs-on: ubuntu-latest
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:freedesktop-23.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: dissonanza.flatpak
+          manifest-path: packaging/flatpak/io.github.hr46ph.Dissonanza.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+
+  publish-github-release:
+    needs: [build-binary, validate-flatpak]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dissonanza-linux-binary
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true
+
+  publish-aur:
+    needs: publish-github-release
+    runs-on: ubuntu-latest
+    # Skips quietly until AUR_SSH_PRIVATE_KEY is configured as a repo secret
+    # (see RELEASES.md — the AUR package also needs a one-time manual push first).
+    if: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push updated PKGBUILD to AUR
+        uses: KSXGit/github-actions-deploy-aur@v3
+        with:
+          pkgname: dissonanza
+          pkgbuild: packaging/aur/PKGBUILD
+          commit_username: ${{ vars.AUR_USERNAME }}
+          commit_email: ${{ vars.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

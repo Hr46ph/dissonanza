@@ -1,0 +1,48 @@
+app-id: io.github.hr46ph.Dissonanza
+runtime: org.freedesktop.Platform
+runtime-version: "23.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: dissonanza
+
+# Least-privilege sandbox for a Roon control-plane client:
+# - network: required for SOOD discovery (UDP multicast) and the MOO websocket to Roon Core.
+# - ipc + dri: required for GPU-accelerated rendering (Slint's renderer, see TECH_STACK.md).
+# - wayland + fallback-x11: Wayland-primary per the research doc's decisions, X11 still works.
+# No filesystem permissions: this app never reads music files directly (control-plane only,
+# see NORTH-STAR.md) — its own config/cache/SQLite rating store lives in the app's private
+# Flatpak data directory automatically, no extra permission needed.
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/dissonanza/cargo-home
+
+modules:
+  - name: dissonanza
+    buildsystem: simple
+    build-commands:
+      - cargo --offline build --release
+      - install -Dm755 target/release/dissonanza /app/bin/dissonanza
+      - install -Dm644 packaging/flatpak/io.github.hr46ph.Dissonanza.desktop
+        /app/share/applications/io.github.hr46ph.Dissonanza.desktop
+      - install -Dm644 packaging/flatpak/io.github.hr46ph.Dissonanza.metainfo.xml
+        /app/share/metainfo/io.github.hr46ph.Dissonanza.metainfo.xml
+      # TODO: install an actual icon once one exists, e.g.:
+      # - install -Dm644 packaging/flatpak/icon-256.png
+      #     /app/share/icons/hicolor/256x256/apps/io.github.hr46ph.Dissonanza.png
+    sources:
+      - type: git
+        url: https://github.com/Hr46ph/dissonanza.git
+        tag: v0.1.0 # bump this to match each release tag
+      # TODO: add `cargo-sources.json` here once Cargo.lock exists — required for
+      # Flathub's network-free build sandbox. Generate via flatpak-builder-tools'
+      # flatpak-cargo-generator.py against Cargo.lock. See RELEASES.md.
+      # - cargo-sources.json

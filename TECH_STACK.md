@@ -26,6 +26,8 @@ Slint's desktop platform support is officially "in progress" upstream, but judge
 
 ## Infrastructure / deployment
 
+See [RELEASES.md](RELEASES.md) for the concrete versioning/release/CI/packaging process built around these choices.
+
 - **Flatpak (Flathub)** — primary distribution channel. One package for all distros; standard network permissions cover UDP multicast (SOOD); GPU passthrough (Vulkan/GL) via standard extensions.
 - **AUR** — secondary channel, for Arch users avoiding Flatpak.
 - **AppImage** — optional, "try without installing" only. No sandboxing/update mechanism needed alongside Flatpak.
