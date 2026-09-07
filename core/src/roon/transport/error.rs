@@ -19,6 +19,10 @@ pub enum TransportError {
         #[source]
         source: serde_json::Error,
     },
-    #[error("unexpected {verb:?} {name} for a zone subscription")]
+    #[error("unexpected {verb:?} {name} response")]
     UnexpectedResponse { verb: MooVerb, name: String },
+    #[error("no response to {name}")]
+    NoResponse { name: String },
+    #[error("{name} command failed")]
+    CommandFailed { name: String },
 }
