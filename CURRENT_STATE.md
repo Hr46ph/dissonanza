@@ -29,6 +29,7 @@ dissonanza/
 │           └── connection/      # sole owner of Core discovery/pairing/keepalive (CLAUDE.md §1)
 │               ├── mod.rs           # mod config; mod sood; mod moo; (private — not a public surface yet)
 │               ├── config.rs        # ConnectionConfig — extension identity for MOO registration
+│               ├── keepalive.rs     # Keepalive — app-level staleness health-check
 │               ├── sood/            # private: SOOD discovery, never `pub`
 │               │   ├── mod.rs
 │               │   ├── message.rs   # SoodMessage/SoodMessageType/SoodError — TLV codec, pure parsing
@@ -99,6 +100,13 @@ dissonanza/
   - `connection::config` — `ConnectionConfig` (`extension_id`, `display_name`, `display_version`,
     `publisher`, `email`, optional `website`): the extension identity `moo::handshake::register`
     sends during registration.
+  - `connection::keepalive` — `Keepalive`: tracks when activity (any inbound MOO message) was
+    last observed and reports the connection stale once `timeout` passes with none, regardless of
+    whether `core_paired`/`core_unpaired` fired — the primitive a connection state machine will
+    use to force `Unpaired`/`Disconnected` on staleness, per CLAUDE.md §1. Takes `now` as an
+    explicit `Instant` parameter on every method (rather than reading `Instant::now()`
+    internally) so it's tested without real sleeps. Not wired into a connection state machine
+    yet.
 
 ## Open work
 
@@ -107,12 +115,13 @@ dissonanza/
   loop, MOO message framing, the MOO websocket transport, the MOO registry registration
   handshake, and the inbound `com.roonlabs.pairing:1`/`com.roonlabs.ping:1` services (handling
   `pair` and `ping` requests) are done (see Modules above) — Phase 2 of the implementation plan is
-  complete. Still to build: the app-level keepalive on top of `core_paired`/`core_unpaired`
-  (including the disconnect-inferred "unpair" path — there's no wire message for it, see the
-  `moo::handshake` entry above), reconnect-on-disconnect, and the public `Connection` API tying it
-  all together — none of these are wired up yet, and `sood::discovery::run`/`moo::transport::run`/
-  `moo::handshake::register`/`moo::handshake::PairingState::handle_request`/
-  `moo::handshake::handle_ping_request` aren't called by anything yet.
+  complete. The app-level keepalive staleness check (`connection::keepalive::Keepalive`) is also
+  now done — Phase 3 has started. Still to build: wiring that keepalive into a connection state
+  machine (including the disconnect-inferred "unpair" path — there's no wire message for it, see
+  the `moo::handshake` entry above), reconnect-on-disconnect, and the public `Connection` API
+  tying it all together — none of these are wired up yet, and `sood::discovery::run`/
+  `moo::transport::run`/`moo::handshake::register`/`moo::handshake::PairingState::handle_request`/
+  `moo::handshake::handle_ping_request`/`keepalive::Keepalive` aren't called by anything yet.
   - ~~Custom Rust SOOD/MOO protocol implementation needs its own wire-protocol study~~ — **done**, see
     [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md): packet/message formats, the
     connection/registration/pairing handshake, and the keepalive rationale behind CLAUDE.md §1,
@@ -132,6 +141,16 @@ dissonanza/
 
 ## Recently changed
 
+- Added the app-level keepalive staleness health-check (2026-09-07):
+  `core::roon::connection::keepalive::Keepalive` tracks when activity (any inbound MOO message)
+  was last observed and reports the connection stale once a configurable timeout passes with no
+  further activity — the primitive a later connection state machine will use to force
+  `Unpaired`/`Disconnected` even if `core_paired`/`core_unpaired` didn't fire, per CLAUDE.md §1
+  and the `node-roon-api` `lost_core` bug already documented under `moo::handshake`. Takes `now`
+  as an explicit `Instant` parameter on every method instead of reading `Instant::now()`
+  internally, so its tests drive the clock deterministically without real sleeps. This is the
+  first step of Phase 3 (state, keepalive, reconnect) in the implementation plan. Not wired into
+  a connection state machine yet.
 - Added the `com.roonlabs.ping:1` responder (2026-09-07): `core::roon::connection::moo::handshake::handle_ping_request`
   replies `COMPLETE Success` to an inbound `ping` request, unknown request names get
   `InvalidRequest` (matching the `com.roonlabs.pairing:1` handler's own fallback). Stateless, so
