@@ -46,6 +46,17 @@ dissonanza/
 │                   ├── message.rs   # MooMessage/MooVerb/MooBody/MooError — message framing, pure parsing
 │                   ├── transport.rs # websocket connect, MOO frame send/receive, WS ping/pong keepalive
 │                   └── handshake.rs # registry:1/info + /register handshake; pairing:1 + ping:1 service responders
+│           └── transport/       # com.roonlabs.transport:2 client — Core-provided, this extension consumes it
+│               ├── mod.rs           # PUBLIC surface: model types, TransportError, subscribe_zones/ZoneEvent/
+│               │                    #   ZoneSeekChange/ZoneSubscription, control/seek/ControlAction/SeekHow
+│               ├── model.rs         # Zone/Output/ZoneState/ZoneSettings/LoopMode/NowPlaying/OneLine/TwoLine/
+│               │                    #   ThreeLine/SourceControl/SourceControlStatus/Volume/VolumeType — pure
+│               │                    #   serde::Deserialize types, no I/O
+│               ├── error.rs         # TransportError — this module's own aggregate error type
+│               ├── zones.rs         # subscribe_zones, ZoneEvent/ZoneSeekChange, ZoneSubscription — built on
+│               │                    #   connection::ConnectionRequests, never touches SOOD/pairing/reconnect
+│               └── control.rs       # control/seek one-shot playback verbs, ControlAction/SeekHow — same
+│                                    #   ConnectionRequests-only, no SOOD/pairing/reconnect pattern as zones.rs
 ├── app/                  # `dissonanza` crate (binary) — Slint UI shell, depends on core's public API
 │   └── src/
 │       └── main.rs           # trivial placeholder, no Slint wired up yet
@@ -146,6 +157,62 @@ dissonanza/
     Operates purely over `mpsc` channels shaped like `moo::transport`'s, so it's tested without a
     real websocket.
 
+- **`core::roon::transport`** (`core/src/roon/transport/`) — the `com.roonlabs.transport:2` client
+  (IMPL_TRANSPORT.md Phase 2, done): zone subscription and the typed data model, built entirely on
+  `connection::ConnectionRequests` — never touches SOOD discovery, pairing, or reconnect itself,
+  per CLAUDE.md §1. `connection`'s `REQUIRED_SERVICES` now declares
+  `"com.roonlabs.transport:2"` (a literal there, not a constant imported from this module, so
+  `connection` stays ignorant of `transport:2` specifically beyond needing its name to register).
+  - `transport::model` — `Zone`/`Output`/`ZoneState`/`ZoneSettings`/`LoopMode`/`NowPlaying`/
+    `OneLine`/`TwoLine`/`ThreeLine`/`SourceControl`/`SourceControlStatus`/`Volume`/`VolumeType`:
+    pure `serde::Deserialize` types matching docs/protocol/transport.md's data model field-for-
+    field, including its two flagged divergences (`source_controls` as an array; volume
+    `min`/`max`/`value`/`step` as floats). `Volume`'s unverified `hard_limit_min`/
+    `hard_limit_max`/`soft_limit` fields (seen in only one community port) are deliberately left
+    out for now — `serde` ignores unknown fields, so adding them later costs nothing.
+  - `transport::error` — `TransportError`, this module's own aggregate error type (parallel to
+    `connection::error::ConnectionError`). Shares a name with, but is a distinct type from,
+    `connection::TransportError` (the MOO *websocket* transport's error) — code importing both
+    needs to alias one on `use`, flagged rather than resolved since renaming either would break
+    the "each module's error is named after its own domain" convention `HandshakeError`/
+    `DiscoveryError` already established.
+  - `transport::zones` — `subscribe_zones(&ConnectionRequests) -> Result<ZoneSubscription,
+    TransportError>` sends the request with a hardcoded `subscription_key: 0` (this app only ever
+    opens one zones subscription, per CLAUDE.md's multi-zone/multi-Core non-goal, so nothing needs
+    allocating); `ZoneSubscription::recv(&mut self) -> Option<Result<ZoneEvent, TransportError>>`
+    parses each `CONTINUE` into `ZoneEvent::Subscribed { zones }` or `ZoneEvent::Changed {
+    zones_added, zones_changed, zones_removed, zones_seek_changed }`. A malformed body or an
+    unexpected verb/name surfaces once as an `Err` and then ends the subscription for good (no
+    resync attempt), mirroring `moo::transport`'s own framing-violation handling — further `recv`
+    calls return `None`. No `unsubscribe_zones` this phase: dropping the `ZoneSubscription` is the
+    only way to end interest early, and `connection`'s dispatch-table cleanup already tolerates
+    that lazily. Re-issuing `subscribe_zones` after a reconnect (`ZoneSubscription::recv`
+    returning `None` covers both "Core ended it" and "connection was lost" identically) is left
+    entirely to whatever future caller owns that decision — this module never loops or retries on
+    its own. `connection::requests::MooResponseStream` gained a `pub(crate) fn new(rx) -> Self`
+    (previously only constructed inline inside `send_request`) purely so this module's tests can
+    fabricate a response stream over a plain `mpsc` channel, the same "unit-tested purely over
+    channels, no live Core" pattern `moo::handshake` and `connection::requests` already use;
+    `subscribe_zones` itself (a two-line wrapper) isn't separately tested beyond type-checking,
+    since the logic it delegates to is already covered by `requests.rs`'s own tests.
+  - `transport::control` (IMPL_TRANSPORT.md Phase 3, done) — `control(&ConnectionRequests,
+    zone_or_output_id, ControlAction) -> Result<(), TransportError>` and `seek(&ConnectionRequests,
+    zone_or_output_id, SeekHow, seconds) -> Result<(), TransportError>`: one-shot playback verbs,
+    typed `ControlAction`/`SeekHow` enums serializing to the wire's `control`/`how` string values
+    (`PlayPause` needs an explicit `#[serde(rename = "playpause")]` — snake_case alone would
+    produce `play_pause`, which the Core doesn't accept). Both wait for the single `COMPLETE` these
+    verbs reply with via a shared `await_command_response`/`parse_command_response` pair (the
+    latter pure, unit-tested directly against fabricated `MooMessage`s, mirroring `zones.rs`'s
+    `parse_zone_event` split): `COMPLETE Success` → `Ok(())`, any other `COMPLETE` name → a new
+    `TransportError::CommandFailed { name }` (no source enumerates every non-success status a verb
+    can return, so any other name is treated generically), anything other than a `COMPLETE` →
+    the existing `TransportError::UnexpectedResponse` (its message text generalized off "for a zone
+    subscription" now that `control`/`seek` share it too), stream-ends-with-nothing → a new
+    `TransportError::NoResponse { name }`. No subscription/reconnect handling needed — these are
+    one-shot requests, not subscriptions. `control`/`seek` themselves aren't separately tested
+    beyond type-checking plus a couple of enum-serialization-shape assertions, same precedent
+    `subscribe_zones` set.
+
 ## Open work
 
 - `core::roon::connection` implementation in progress on `feature/roon-connection-core` (branched from
@@ -179,16 +246,15 @@ dissonanza/
     `core::roon::transport` entry below, `browse:1`/`image:1` remain open.
 - `core::roon::transport` (`com.roonlabs.transport:2` — zone list, now-playing, playback control):
   planned in [IMPL_TRANSPORT.md](IMPL_TRANSPORT.md), chosen per user decision (2026-09-07) as the next
-  vertical slice after `connection`. Phase 0 (wire-protocol study) is done, see
-  [docs/protocol/transport.md](docs/protocol/transport.md). Phase 1 (the `connection`-side
-  request/response multiplexing seam `transport` needs — `connection::requests`, see the
-  `core::roon::connection` entry above) is **done**, on `feature/roon-transport` (branched from
-  `develop`), not yet merged. `core::roon::transport` itself still doesn't exist — Phase 1 only built
-  the seam it will use. Phases 2-4's fine steps are still intentionally not written, per the same
-  study-first precedent `docs/IMPL_CORE_CONNECTION.md` set — Phase 2 (zone subscription & state model)
-  is next. Non-goals for this phase: zone grouping/ungrouping (wire shape documented anyway in the
-  Phase 0 study, implementation deferred), `browse:1`/`image:1`, Slint UI, multi-zone/multi-Core
-  (permanent, per NORTH-STAR.md).
+  vertical slice after `connection`. Phase 0 (wire-protocol study) and Phase 1 (the `connection`-side
+  request/response multiplexing seam) are done, see the `core::roon::connection` entry above. Phase 2
+  (zone subscription & state model) is done too, see the `core::roon::transport` entry above. Phase 3
+  (playback controls: `control`/`seek`) is now **done** too, see the `transport::control` entry above —
+  still on `feature/roon-transport` (branched from `develop`), not yet merged. Phase 4 (volume/output
+  controls: `change_volume`/`mute`/`standby`) is next; its fine steps are still intentionally not
+  written, per the same study-first precedent `docs/IMPL_CORE_CONNECTION.md` set. Non-goals for this
+  phase: zone grouping/ungrouping (wire shape documented anyway in the Phase 0 study, implementation
+  deferred), `browse:1`/`image:1`, Slint UI, multi-zone/multi-Core (permanent, per NORTH-STAR.md).
 - Slint GUI: not started (app/src/main.rs is a trivial placeholder).
 - Pairing-token persistence (so a paired extension doesn't have to re-pair on every restart) is
   deferred until a cache-store phase exists — the MOO handshake step will hold it in memory only.
@@ -200,6 +266,41 @@ dissonanza/
 
 ## Recently changed
 
+- Added `core::roon::transport::control` for playback controls (2026-09-07): IMPL_TRANSPORT.md Phase
+  3, on `feature/roon-transport`. Wrote Phase 3's design decisions and numbered steps into
+  IMPL_TRANSPORT.md first (Phase 0/1 were both already done, so — per the plan's own study-first
+  precedent — the fine steps could finally be written rather than guessed). Step 3.1 added
+  `TransportError::CommandFailed`/`TransportError::NoResponse` and generalized
+  `UnexpectedResponse`'s message text off "for a zone subscription" now that `control`/`seek` share
+  it with `zones.rs` too. Step 3.2 added `transport::control`: typed `ControlAction`/`SeekHow`
+  enums (`PlayPause` needs an explicit `#[serde(rename = "playpause")]` override — plain snake_case
+  would produce `play_pause`, which the wire protocol doesn't accept), `control`/`seek` request
+  functions, and a `parse_command_response`/`await_command_response` pair handling the single
+  `COMPLETE` each verb replies with — `Success` → `Ok(())`, any other name → `CommandFailed`,
+  anything but a `COMPLETE` → `UnexpectedResponse`, an empty stream → `NoResponse`. Same
+  pure-parser/thin-async-wrapper split `zones.rs`'s `parse_zone_event`/`ZoneSubscription::recv`
+  already established, and the same testing precedent: the pure parser and the async wrapper (over
+  a fabricated `MooResponseStream::new(rx)`) are unit-tested directly, `control`/`seek` themselves
+  aren't beyond type-checking and two enum-serialization assertions — 7 new tests, 79 total. No
+  subscription/reconnect handling needed, unlike `zones.rs`: these are one-shot requests. Phase 4
+  (volume/output controls) is next.
+- Added `core::roon::transport` for zone subscription & state (2026-09-07): IMPL_TRANSPORT.md Phase
+  2, on `feature/roon-transport`. Step 2.1 added `transport::model`'s typed
+  `Zone`/`Output`/`NowPlaying`/`Volume`/... types (pure `serde::Deserialize`, unit-tested against
+  fixture JSON matching docs/protocol/transport.md). Step 2.2 added `"com.roonlabs.transport:2"` to
+  `connection`'s `REQUIRED_SERVICES` (previously empty). Step 2.3 added `transport::error`
+  (`TransportError`) and `transport::zones` (`subscribe_zones`, `ZoneEvent`, `ZoneSeekChange`,
+  `ZoneSubscription`), parsing `CONTINUE Subscribed`/`Changed` messages off a
+  `connection::MooResponseStream` into typed events, ending the subscription for good (not
+  resyncing) on a malformed or unrecognized response. `connection::requests::MooResponseStream`
+  gained a `pub(crate) fn new(rx) -> Self` specifically so this module's tests could fabricate a
+  response stream over a plain `mpsc` channel without a live Core, the same pattern
+  `connection::requests`'s own tests already use — 13 new tests, 72 total. Flagged, not resolved:
+  `transport::TransportError` shares its name with (but is a distinct type from)
+  `connection::TransportError` (the MOO websocket transport's error) — code importing both will
+  need to alias one on `use`. `core::roon::transport` doesn't yet expose any control verbs
+  (`control`/`seek`/`change_volume`/...) or `subscribe_outputs`/`subscribe_queue` — Phase 3
+  (playback controls) is next.
 - Added `connection::requests` for generic MOO request/response multiplexing (2026-09-07):
   IMPL_TRANSPORT.md Phase 1, on `feature/roon-transport` (branched from `develop`). Step 1.1
   re-exports `MooMessage`/`MooVerb`/`MooBody` from `connection` (were already `pub` within
