@@ -25,7 +25,7 @@ dissonanza/
 │   └── src/
 │       ├── lib.rs           # pub mod roon;
 │       └── roon/
-│           ├── mod.rs           # pub mod connection;
+│           ├── mod.rs           # pub mod browse; pub mod connection; pub mod transport;
 │           └── connection/      # sole owner of Core discovery/pairing/keepalive (CLAUDE.md §1)
 │               ├── mod.rs           # PUBLIC surface: Connection, ConnectionHandle, ConnectionRequests,
 │               │                    #   ConnectionConfig, ConnectionEvent, ConnectionState, ConnectionError
@@ -59,6 +59,17 @@ dissonanza/
 │               └── control.rs       # control/seek/change_volume/mute/standby one-shot verbs,
 │                                    #   ControlAction/SeekHow/ChangeVolumeHow/MuteHow — same
 │                                    #   ConnectionRequests-only, no SOOD/pairing/reconnect pattern as zones.rs
+│           └── browse/          # com.roonlabs.browse:1 client — Core-provided, this extension consumes it
+│               ├── mod.rs           # PUBLIC surface: BrowseError, List/Item/InputPrompt/ItemHint/ListHint,
+│               │                    #   Hierarchy/BrowseOptions/LoadOptions/BrowseResult/LoadResult/
+│               │                    #   BrowseAction/browse/load
+│               ├── model.rs         # List/Item/InputPrompt/ListHint/ItemHint — pure serde::Deserialize
+│               │                    #   types, no I/O
+│               ├── error.rs         # BrowseError — this module's own aggregate error type
+│               └── request.rs       # Hierarchy/BrowseOptions/LoadOptions/BrowseResult/LoadResult/
+│                                    #   BrowseAction, and browse/load one-shot request functions — built
+│                                    #   on ConnectionRequests only, no SOOD/pairing/reconnect, no session
+│                                    #   state (browse-stack state lives Core-side)
 ├── app/                  # `dissonanza` crate (binary) — Slint UI shell, depends on core's public API
 │   └── src/
 │       └── main.rs           # trivial placeholder, no Slint wired up yet
@@ -77,10 +88,13 @@ dissonanza/
 │   ├── roon-linux-remote-client-onderzoek.md   # original research notes (Dutch); source for the files above
 │   ├── IMPL_CORE_CONNECTION.md   # completed implementation plan for core::roon::connection (Phases 0-4)
 │   ├── IMPL_TRANSPORT.md   # completed implementation plan for core::roon::transport (Phases 0-5)
+│   ├── IMPL_BROWSE.md      # completed implementation plan for core::roon::browse (Phases 0-2)
 │   └── protocol/
 │       ├── sood-moo.md    # SOOD/MOO wire-protocol study — normative reference for core::roon::connection
-│       └── transport.md   # com.roonlabs.transport:2 wire-protocol study — normative reference for
-│                           #   core::roon::transport (implemented, see Modules below)
+│       ├── transport.md   # com.roonlabs.transport:2 wire-protocol study — normative reference for
+│       │                   #   core::roon::transport (implemented, see Modules below)
+│       └── browse.md      # com.roonlabs.browse:1 wire-protocol study — normative reference for
+│                           #   core::roon::browse (implemented, see Modules below)
 └── README.md
 ```
 
@@ -222,6 +236,43 @@ dissonanza/
     unchanged, no new `TransportError` variants needed since Phase 3 already generalized
     `UnexpectedResponse` for this reuse.
 
+- **`core::roon::browse`** (`core/src/roon/browse/`) — the `com.roonlabs.browse:1` client
+  (IMPL_BROWSE.md Phase 1, done): sidebar categories, browse paths, and search, built entirely on
+  `connection::ConnectionRequests` — never touches SOOD discovery, pairing, or reconnect itself, per
+  CLAUDE.md §1. `connection`'s `REQUIRED_SERVICES` now also declares `"com.roonlabs.browse:1"`.
+  Unlike `transport:2`, this service has no subscription/`CONTINUE` stream at all — `browse` and `load`
+  are one-shot request/response calls, and the browse stack itself lives entirely on the Core (keyed by
+  `hierarchy`/`multi_session_key`), so this module holds no internal session or paging state of its own
+  — the design question IMPL_BROWSE.md opened was resolved by this finding before any code was written.
+  - `browse::model` — `List`/`Item`/`InputPrompt`/`ListHint`/`ItemHint`: pure `serde::Deserialize` types
+    matching docs/protocol/browse.md's data model field-for-field. An unrecognized `hint` string parses
+    into a catch-all `Other` variant rather than a hard error, mirroring `transport::model::VolumeType
+    ::Other`'s precedent, per the JSDoc's own forward-compatibility instruction — `None` (absent, or
+    JSON `null`) and `Some(Other)` should be treated the same way by a caller.
+  - `browse::error` — `BrowseError`: the same seven variants `transport::TransportError` established
+    (`Request`, `MissingBody`, `NonJsonBody`, `MalformedBody`, `UnexpectedResponse`, `NoResponse`,
+    `CommandFailed`), generalized for a service whose `Success` response carries a body to parse rather
+    than being empty.
+  - `browse::request` — `Hierarchy` (typed enum of all eight documented values — a real, caller-supplied
+    field, unlike `TheAppgineer/rust-roon-api`'s port, which hardcodes `"browse"` internally and can't
+    reach the other seven); `BrowseOptions`/`LoadOptions` (`hierarchy` required via a `new(hierarchy)`
+    constructor, deliberately no `Default` impl since there's no sensible default hierarchy to pick;
+    every other field `Option<_>`, `skip_serializing_if` omits it from the wire when unset);
+    `BrowseResult`/`LoadResult`/`BrowseAction` (response-shaped, built from `model::{List, Item}`); and
+    `browse`/`load` — thin one-shot wrappers around a shared generic `parse_response<T:
+    DeserializeOwned>`/`await_response<T>` pair (parallel to, not reusing, `transport::control`'s own —
+    different crate-internal modules, not worth a shared helper for two call sites): `COMPLETE Success`
+    with a JSON body → parsed into `T`; any other `COMPLETE` name → `CommandFailed` (not an exhaustive
+    enum of the four error names docs/protocol/browse.md corroborated, same generic-fallback precedent
+    `TransportError::CommandFailed` set); anything other than a `COMPLETE` → `UnexpectedResponse`; an
+    empty stream → `NoResponse`. Named `request.rs`, not `browse.rs` — the latter would collide with the
+    parent module's own name (`clippy::module_inception`). No reconnect-specific handling, same
+    reasoning `zones.rs`/`control.rs` established; left as an acknowledged, unconfirmed gap in this
+    module's doc comment: no source studied for docs/protocol/browse.md states whether a Core-side
+    browse-stack position survives a `connection` reconnect. `browse`/`load` themselves aren't
+    separately tested beyond type-checking plus `Hierarchy`/options serialization-shape assertions,
+    mirroring the precedent `subscribe_zones`/`control`/`seek` all set.
+
 ## Open work
 
 - `core::roon::connection` implementation in progress on `feature/roon-connection-core` (branched from
@@ -251,8 +302,8 @@ dissonanza/
     Rust ports (`shin1ohno/roon-rs`, `TheAppgineer/rust-roon-api` — legally-clear reference/reuse
     material; "not relying on it" was about not taking a dependency, not about the code being
     off-limits). Still open: per-service (transport/browse/image/...) message body shapes aren't
-    covered by this study — each needs its own; `transport:2`'s is now done, see the
-    `core::roon::transport` entry below, `browse:1`/`image:1` remain open.
+    covered by this study — each needs its own; `transport:2`'s and `browse:1`'s are now done, see the
+    `core::roon::transport`/`core::roon::browse` entries below, `image:1` remains open.
 - `core::roon::transport` (`com.roonlabs.transport:2` — zone list, now-playing, playback control): all
   five phases of [docs/IMPL_TRANSPORT.md](docs/IMPL_TRANSPORT.md) are complete as of the
   `feature/roon-transport` → `develop` merge recorded below — see the `core::roon::transport` and
@@ -260,14 +311,15 @@ dissonanza/
   unit tests, `clippy -- -D warnings`, `fmt --check` all clean). Non-goals for this phase: zone
   grouping/ungrouping (wire shape documented anyway in the Phase 0 study, implementation deferred),
   `browse:1`/`image:1`, Slint UI, multi-zone/multi-Core (permanent, per NORTH-STAR.md).
-- `core::roon::browse` (`com.roonlabs.browse:1` — sidebar categories, browse paths, search): planned in
-  [IMPL_BROWSE.md](IMPL_BROWSE.md), chosen per user decision (2026-09-07) as the next vertical slice after
-  `transport`, the other major leg of NORTH-STAR.md's "every sidebar category, browse path" parity goal.
-  Phase 0 (wire-protocol study) is **done**, see [docs/protocol/browse.md](docs/protocol/browse.md) — it
-  resolved the plan's open architectural question (no internal session/paging state needed;
-  `browse`/`load` are stateless request/response pairs from this module's point of view, the actual
-  browse-stack state lives Core-side). A Phase 1+ design sketch is written into IMPL_BROWSE.md but not
-  yet confirmed with the user or split into numbered Gate-1 steps — no code changes yet.
+- `core::roon::browse` (`com.roonlabs.browse:1` — sidebar categories, browse paths, search): both phases
+  of [docs/IMPL_BROWSE.md](docs/IMPL_BROWSE.md) are complete as of the `feature/roon-browse` → `develop`
+  merge recorded below — see the `core::roon::browse` entry above for what it built. Chosen per user decision
+  (2026-09-07) as the next vertical slice after `transport`, the other major leg of NORTH-STAR.md's
+  "every sidebar category, browse path" parity goal. All four `cargo` gates green (100 unit tests,
+  `clippy -- -D warnings`, `fmt --check` all clean). Flagged, not resolved: no source studied for
+  docs/protocol/browse.md confirms whether a Core-side browse-stack position survives a `connection`
+  reconnect. Non-goals for this phase: `image:1`, Slint UI (see NORTH-STAR.md/IMPL_BROWSE.md's own
+  non-goals), multi-zone/multi-Core (permanent, per NORTH-STAR.md).
 - Slint GUI: not started (app/src/main.rs is a trivial placeholder).
 - Pairing-token persistence (so a paired extension doesn't have to re-pair on every restart) is
   deferred until a cache-store phase exists — the MOO handshake step will hold it in memory only.
@@ -279,6 +331,28 @@ dissonanza/
 
 ## Recently changed
 
+- Archived the completed browse implementation plan (2026-09-07): moved `IMPL_BROWSE.md` to
+  [docs/IMPL_BROWSE.md](docs/IMPL_BROWSE.md) now that both phases are done — same precedent as
+  `IMPL_TRANSPORT.md`/`IMPL_CORE_CONNECTION.md`'s own archival. Never a tracked file, so this was a
+  plain filesystem move, not a `git mv`. The moved file's own internal links (to `CLAUDE.md`,
+  `NORTH-STAR.md`, `docs/protocol/...`, etc.) are left root-relative and unadjusted, matching
+  `IMPL_TRANSPORT.md`'s own archived copy — an established, if imperfect, precedent for these
+  reference-only docs, not something introduced here.
+- Added `core::roon::browse` for `com.roonlabs.browse:1` and merged the phase (2026-09-07):
+  IMPL_BROWSE.md Phase 1 (request client) and Phase 2 (verification & merge), on `feature/roon-browse`.
+  Step 1.1 added `browse::model`'s `List`/`Item`/`InputPrompt`/`ListHint`/`ItemHint` (pure
+  `serde::Deserialize`, unit-tested against fixture JSON matching docs/protocol/browse.md, including the
+  unrecognized-hint-falls-back-to-`Other` case). Step 1.2 added `"com.roonlabs.browse:1"` to
+  `connection`'s `REQUIRED_SERVICES` (previously just `transport:2`). Step 1.3 added `browse::error`
+  (`BrowseError`, the same seven variants `TransportError` established) and `browse::request`
+  (`Hierarchy`, `BrowseOptions`/`LoadOptions`, `BrowseResult`/`LoadResult`/`BrowseAction`, `browse`/
+  `load`) — named `request.rs` rather than `browse.rs` to avoid a `clippy::module_inception` collision
+  with the parent module's own name, a naming wrinkle IMPL_TRANSPORT.md's `control.rs`/`zones.rs` split
+  never had to consider. 19 new tests, 100 total; all four `cargo` gates green
+  (`cargo check`, `cargo test`, `clippy -- -D warnings`, `fmt --check`). No live-Core verification, same
+  reasoning every phase since `docs/IMPL_CORE_CONNECTION.md`'s Phase 4.1 finding has given. Confirmed
+  with the user before implementing (no remaining open design question — Phase 0's study had already
+  resolved the plan's one architectural question).
 - Completed the `com.roonlabs.browse:1` wire-protocol study (2026-09-07):
   [docs/protocol/browse.md](docs/protocol/browse.md) — IMPL_BROWSE.md's Phase 0. Covers the `List`/`Item`/
   `InputPrompt` data model, the `browse`/`load` request/response envelope (both one-shot, single-`COMPLETE`
