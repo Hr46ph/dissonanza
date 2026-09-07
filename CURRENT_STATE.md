@@ -27,14 +27,18 @@ dissonanza/
 │       └── roon/
 │           ├── mod.rs           # pub mod connection;
 │           └── connection/      # sole owner of Core discovery/pairing/keepalive (CLAUDE.md §1)
-│               ├── mod.rs           # mod config; mod sood; mod moo; (private — not a public surface yet)
+│               ├── mod.rs           # PUBLIC surface: Connection, ConnectionHandle, ConnectionConfig,
+│               │                    #   ConnectionEvent, ConnectionState, ConnectionError (+ DiscoveryError/
+│               │                    #   TransportError/HandshakeError re-exports). sood/moo stay private.
 │               ├── config.rs        # ConnectionConfig — extension identity for MOO registration
+│               ├── state.rs         # ConnectionState, ConnectionEvent
+│               ├── error.rs         # ConnectionError — wraps DiscoveryError/TransportError/HandshakeError
 │               ├── keepalive.rs     # Keepalive — app-level staleness health-check
-│               ├── sood/            # private: SOOD discovery, never `pub`
+│               ├── sood/            # private: SOOD discovery, never `pub` outside `connection`
 │               │   ├── mod.rs
 │               │   ├── message.rs   # SoodMessage/SoodMessageType/SoodError — TLV codec, pure parsing
 │               │   └── discovery.rs # per-interface multicast sockets, query cadence, dedupe by unique_id
-│               └── moo/             # private: MOO websocket protocol, never `pub`
+│               └── moo/             # private: MOO websocket protocol, never `pub` outside `connection`
 │                   ├── mod.rs
 │                   ├── message.rs   # MooMessage/MooVerb/MooBody/MooError — message framing, pure parsing
 │                   ├── transport.rs # websocket connect, MOO frame send/receive, WS ping/pong keepalive
@@ -63,14 +67,34 @@ dissonanza/
 ## Modules
 
 - **`core::roon::connection`** (`core/src/roon/connection/`) — per CLAUDE.md §1, the sole owner of
-  Core discovery, `core_paired`/`core_unpaired` handling, keepalive, and reconnect. Not a public API
-  yet (no `Connection` type exists) — currently just its private internals:
+  Core discovery, `core_paired`/`core_unpaired` handling, keepalive, and reconnect. Now has a
+  public API: `Connection::spawn(ConnectionConfig) -> (ConnectionHandle,
+  mpsc::UnboundedReceiver<ConnectionEvent>)` wires discovery → MOO connect → registry handshake →
+  the pairing:1/ping:1 request loop → keepalive into one task. `sood`/`moo` stay private modules
+  (only reachable from `connection` itself, via `pub(super)`) — nothing outside this module calls
+  them directly.
+  - `connection::state` — `ConnectionState` (`Discovering`, `Connecting`, `Registering`,
+    `Paired { core_id }`, `Disconnected`) and `ConnectionEvent` (`StateChanged`, `Error`), emitted
+    on `Connection::spawn`'s event channel.
+  - `connection::error` — `ConnectionError`, wrapping `DiscoveryError`/`TransportError`/
+    `HandshakeError` (re-exported from `connection` so callers can match on them without reaching
+    into `sood`/`moo`).
+  - `connection::config` — `ConnectionConfig` (`extension_id`, `display_name`, `display_version`,
+    `publisher`, `email`, optional `website`): the extension identity `moo::handshake::register`
+    sends during registration. Now `pub` (it's `Connection::spawn`'s input).
+  - `connection::keepalive` — `Keepalive`: tracks when activity (any inbound MOO message) was
+    last observed and reports the connection stale once `timeout` passes with none, regardless of
+    whether `core_paired`/`core_unpaired` fired. Wired into `connection/mod.rs`'s request loop
+    with a judgment-call default (60s timeout, checked every 10s) — `docs/protocol/sood-moo.md`
+    doesn't document a Core-side app-level ping cadence to derive this from, flagged as an
+    explicit assumption rather than a sourced value.
   - `sood::message` — SOOD TLV packet parsing/encoding (`SoodMessage`, `SoodError`). Pure, no I/O.
   - `sood::discovery` — the multicast discovery loop: one send/receive socket per local IPv4
     interface (`socket2`), 5s interface re-enumeration (`if-addrs`), query cadence (10s×6 then 60s),
-    dedupe by `unique_id`, `_replyaddr`/`_replyport` override. Exposes `run(...)`, not yet called by
-    anything — wiring it into a `Connection` state machine that also owns MOO pairing and knows when
-    to stop discovering (Core paired) is separate, not-yet-started work.
+    dedupe by `unique_id`, `_replyaddr`/`_replyport` override. `connection/mod.rs` takes the first
+    discovered Core and stops discovery once it has one — it doesn't yet keep discovery running as
+    a fallback in case that candidate fails, or retry; that's reconnect-on-disconnect territory,
+    still open below.
   - `moo::message` — MOO message framing (`MooMessage`, `MooVerb`, `MooBody`, `MooError`).
     Parses/encodes the header-block + blank-line + body wire format: `Request-Id` extraction,
     `Content-Length`/`Content-Type` cross-validation, JSON vs. raw-bytes body handling. Pure,
@@ -80,7 +104,6 @@ dissonanza/
     binary WS frames over `mpsc` channels, and runs an application-level WS ping every
     (caller-supplied) interval, closing the connection if a pong is missed. A framing violation
     (malformed MOO bytes, or a text frame) ends the loop immediately rather than resyncing.
-    Exposes `run(...)`, not yet called by anything.
   - `moo::handshake` — the registry registration handshake: sends `registry:1/info` then
     `registry:1/register` (declaring caller-supplied `provided_services`, plus a saved token if
     the caller has one), and parses the `COMPLETE Registered` body (`core_id`, `token`,
@@ -90,38 +113,27 @@ dissonanza/
     report current pairing status, and an inbound `pair` request (the Core, when the user pairs
     this extension in Roon's UI) sets it and emits `PairingEvent::Paired`. There is no `unpair`
     wire message — per `node-roon-api`, unpairing is inferred purely from the moo connection
-    closing, so it's handled where connection lifecycle is tracked (Phase 3's keepalive/
-    reconnect), not here. Also implements the `com.roonlabs.ping:1` service this extension
+    closing, so it's handled where connection lifecycle is tracked (the keepalive backstop
+    above), not here. Also implements the `com.roonlabs.ping:1` service this extension
     provides in return (`handle_ping_request`, stateless): replies `COMPLETE Success` to an
     inbound `ping` request, distinct from the WS-level ping/pong `moo::transport` already runs.
     Operates purely over `mpsc` channels shaped like `moo::transport`'s, so it's tested without a
-    real websocket. Exposes `register(...)`, `PairingState::handle_request(...)`, and
-    `handle_ping_request(...)`, not yet called by anything.
-  - `connection::config` — `ConnectionConfig` (`extension_id`, `display_name`, `display_version`,
-    `publisher`, `email`, optional `website`): the extension identity `moo::handshake::register`
-    sends during registration.
-  - `connection::keepalive` — `Keepalive`: tracks when activity (any inbound MOO message) was
-    last observed and reports the connection stale once `timeout` passes with none, regardless of
-    whether `core_paired`/`core_unpaired` fired — the primitive a connection state machine will
-    use to force `Unpaired`/`Disconnected` on staleness, per CLAUDE.md §1. Takes `now` as an
-    explicit `Instant` parameter on every method (rather than reading `Instant::now()`
-    internally) so it's tested without real sleeps. Not wired into a connection state machine
-    yet.
+    real websocket.
 
 ## Open work
 
 - `core::roon::connection` implementation in progress on `feature/roon-connection-core` (branched from
   a new `develop`, per CLAUDE.md's git workflow): SOOD TLV parsing, the SOOD multicast discovery
   loop, MOO message framing, the MOO websocket transport, the MOO registry registration
-  handshake, and the inbound `com.roonlabs.pairing:1`/`com.roonlabs.ping:1` services (handling
-  `pair` and `ping` requests) are done (see Modules above) — Phase 2 of the implementation plan is
-  complete. The app-level keepalive staleness check (`connection::keepalive::Keepalive`) is also
-  now done — Phase 3 has started. Still to build: wiring that keepalive into a connection state
-  machine (including the disconnect-inferred "unpair" path — there's no wire message for it, see
-  the `moo::handshake` entry above), reconnect-on-disconnect, and the public `Connection` API
-  tying it all together — none of these are wired up yet, and `sood::discovery::run`/
-  `moo::transport::run`/`moo::handshake::register`/`moo::handshake::PairingState::handle_request`/
-  `moo::handshake::handle_ping_request`/`keepalive::Keepalive` aren't called by anything yet.
+  handshake, the inbound `com.roonlabs.pairing:1`/`com.roonlabs.ping:1` services, the app-level
+  keepalive staleness check, and now the connection state machine and public `Connection` API
+  wiring all of it together are done (see Modules above) — Phase 3's first two steps (3.1, 3.2)
+  are complete. Still to build (3.3): reconnect-on-disconnect — right now, when the transport
+  closes, the keepalive goes stale, or a step fails, `Connection` just reports `Disconnected` and
+  stops; it doesn't loop back to a fresh `Discovering` pass the way CLAUDE.md's mandatory
+  technical choices require (never redial a stale address, always wait for a new SOOD discovery
+  event). Also open: pairing-token persistence, and the discovery-keeps-running-as-a-fallback
+  question noted under `sood::discovery` above, which is really the same reconnect work.
   - ~~Custom Rust SOOD/MOO protocol implementation needs its own wire-protocol study~~ — **done**, see
     [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md): packet/message formats, the
     connection/registration/pairing handshake, and the keepalive rationale behind CLAUDE.md §1,
@@ -141,6 +153,39 @@ dissonanza/
 
 ## Recently changed
 
+- Added the connection state machine and public `Connection` API (2026-09-07):
+  `core::roon::connection::{state, error, mod}` — `Connection::spawn(ConnectionConfig) ->
+  (ConnectionHandle, mpsc::UnboundedReceiver<ConnectionEvent>)` is now the single public entry
+  point wiring `sood::discovery` → `moo::transport` → `moo::handshake` → `keepalive` together:
+  discover the first Core, connect, run the registry handshake, then loop handling inbound
+  `pairing:1`/`ping:1` requests while the keepalive watches for staleness, emitting
+  `ConnectionEvent::StateChanged` through `Discovering → Connecting → Registering →
+  Paired { core_id }` and `ConnectionEvent::Error`/`Disconnected` on the way out. `sood`/`moo`
+  submodules were changed from private to `pub(super)` so `connection/mod.rs` could reach into
+  them — they're still unreachable from outside `connection` itself (nothing outside this module
+  calls SOOD or reacts to pairing events directly, per CLAUDE.md §1), just no longer unreachable
+  from `connection` too. `DiscoveryError`/`TransportError`/`HandshakeError` were promoted from
+  `pub(crate)` to `pub` and re-exported from `connection` so `ConnectionError` (now `pub`, wrapping
+  all three) doesn't leak an unnameable type across the `dissonanza-core`/`dissonanza` crate
+  boundary — caught by `cargo build`'s `private_interfaces` lint, not something CI's `-D warnings`
+  clippy pass alone would have surfaced first. `ConnectionConfig` was likewise promoted from
+  `pub(crate)` to `pub`, since it's now `Connection::spawn`'s parameter type. Diverges from
+  IMPL_CORE_CONNECTION.md's step 3.2 sketch of `error.rs` wrapping `SoodError`/`MooError`
+  directly: the actual boundary functions this step calls (`sood::discovery::run`,
+  `moo::transport::run`, `moo::handshake::register`/`handle_ping_request`/
+  `PairingState::handle_request`) return `DiscoveryError`/`TransportError`/`HandshakeError`
+  instead — those are the types that exist at the call sites, so `ConnectionError` wraps those.
+  The app-level keepalive timeout (60s, checked every 10s) is a flagged judgment call, not a
+  sourced protocol value — `docs/protocol/sood-moo.md` documents the MOO registry handshake and
+  the 10s/one-missed-pong WS-level ping but not how often a Core sends `ping:1/ping` requests at
+  the application level, which is what this backstop is really watching for. Discovery stops as
+  soon as the first candidate Core is found, rather than continuing to run until paired (a
+  possible design the `sood::discovery` doc comment previously speculated about) — with no
+  reconnect/retry logic yet (that's step 3.3), keeping discovery running past having a usable
+  candidate wouldn't currently do anything with any further candidates it found. This step
+  intentionally does not reconnect: on any disconnect (transport closed, keepalive stale, a step
+  failed, or `ConnectionHandle::shutdown` called), `Connection` reports `Disconnected` and stops
+  rather than looping back to a fresh `Discovering` pass — that loop-back is step 3.3, next.
 - Added the app-level keepalive staleness health-check (2026-09-07):
   `core::roon::connection::keepalive::Keepalive` tracks when activity (any inbound MOO message)
   was last observed and reports the connection stale once a configurable timeout passes with no
