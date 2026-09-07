@@ -83,10 +83,17 @@ dissonanza/
   - `moo::handshake` — the registry registration handshake: sends `registry:1/info` then
     `registry:1/register` (declaring caller-supplied `provided_services`, plus a saved token if
     the caller has one), and parses the `COMPLETE Registered` body (`core_id`, `token`,
-    `display_name`, `display_version`, `provided_services`) into a typed `Registered`. Operates
-    purely over `mpsc` channels shaped like `moo::transport`'s, so it's tested without a real
-    websocket. Exposes `register(...)`, not yet called by anything. Pairing (`pair`/`unpair`) and
-    the `ping:1` responder are still separate, not-yet-started steps.
+    `display_name`, `display_version`, `provided_services`) into a typed `Registered`. Also
+    implements the `com.roonlabs.pairing:1` service this extension provides in return
+    (`PairingState`/`PairingEvent`): `subscribe_pairing`/`unsubscribe_pairing`/`get_pairing`
+    report current pairing status, and an inbound `pair` request (the Core, when the user pairs
+    this extension in Roon's UI) sets it and emits `PairingEvent::Paired`. There is no `unpair`
+    wire message — per `node-roon-api`, unpairing is inferred purely from the moo connection
+    closing, so it's handled where connection lifecycle is tracked (Phase 3's keepalive/
+    reconnect), not here. Operates purely over `mpsc` channels shaped like `moo::transport`'s, so
+    it's tested without a real websocket. Exposes `register(...)` and
+    `PairingState::handle_request(...)`, not yet called by anything. The `ping:1` responder is
+    still a separate, not-yet-started step.
   - `connection::config` — `ConnectionConfig` (`extension_id`, `display_name`, `display_version`,
     `publisher`, `email`, optional `website`): the extension identity `moo::handshake::register`
     sends during registration.
@@ -95,12 +102,14 @@ dissonanza/
 
 - `core::roon::connection` implementation in progress on `feature/roon-connection-core` (branched from
   a new `develop`, per CLAUDE.md's git workflow): SOOD TLV parsing, the SOOD multicast discovery
-  loop, MOO message framing, the MOO websocket transport, and the MOO registry registration
-  handshake are done (see Modules above). Still to build: handling inbound `pair`/`unpair` events,
-  the `ping:1` responder, the app-level keepalive on top of `core_paired`/`core_unpaired`,
-  reconnect-on-disconnect, and the public `Connection` API tying it all together — none of these are
-  wired up yet, and `sood::discovery::run`/`moo::transport::run`/`moo::handshake::register` aren't
-  called by anything yet.
+  loop, MOO message framing, the MOO websocket transport, the MOO registry registration
+  handshake, and the inbound `com.roonlabs.pairing:1` service (handling `pair` requests) are done
+  (see Modules above). Still to build: the `ping:1` responder, the app-level keepalive on top of
+  `core_paired`/`core_unpaired` (including the disconnect-inferred "unpair" path — there's no
+  wire message for it, see the `moo::handshake` entry above), reconnect-on-disconnect, and the
+  public `Connection` API tying it all together — none of these are wired up yet, and
+  `sood::discovery::run`/`moo::transport::run`/`moo::handshake::register`/
+  `moo::handshake::PairingState::handle_request` aren't called by anything yet.
   - ~~Custom Rust SOOD/MOO protocol implementation needs its own wire-protocol study~~ — **done**, see
     [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md): packet/message formats, the
     connection/registration/pairing handshake, and the keepalive rationale behind CLAUDE.md §1,
@@ -120,6 +129,18 @@ dissonanza/
 
 ## Recently changed
 
+- Added the inbound `com.roonlabs.pairing:1` service handler (2026-09-07):
+  `core::roon::connection::moo::handshake::PairingState` responds to `subscribe_pairing`/
+  `unsubscribe_pairing`/`get_pairing` with current pairing status and, on an inbound `pair`
+  request, marks the connection paired and emits `PairingEvent::Paired { core_id }`. While
+  implementing this, cross-checked `node-roon-api`'s `lib.js` (the reference source
+  `docs/protocol/sood-moo.md` already cites) and found there is no `unpair` wire message —
+  unpairing is inferred purely from the moo websocket closing (and the reference
+  implementation has a real missing-braces bug that fires `core_unpaired` for *any* core's
+  disconnect, not just the paired one), which is concrete, sourced grounding for why CLAUDE.md
+  §1 requires an app-level keepalive backstop rather than trusting `core_paired`/`core_unpaired`
+  alone. That disconnect-inferred "unpair" handling is deferred to Phase 3's keepalive/reconnect
+  work, not this module. Not wired into a connection state machine yet.
 - Added the MOO registry registration handshake (2026-09-07): `core::roon::connection::moo::handshake`
   (`register(...)`) sends `registry:1/info` then `registry:1/register` (declaring caller-supplied
   `provided_services` and an optional saved token), and parses the `COMPLETE Registered` body into

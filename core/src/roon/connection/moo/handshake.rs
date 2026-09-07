@@ -1,11 +1,11 @@
-//! MOO registry registration handshake: `com.roonlabs.registry:1/info` followed by
-//! `com.roonlabs.registry:1/register`, per `docs/protocol/sood-moo.md`.
+//! MOO registry registration handshake (`com.roonlabs.registry:1/info` then
+//! `.../register`) and the `com.roonlabs.pairing:1` service this extension provides in
+//! response, per `docs/protocol/sood-moo.md`.
 //!
 //! Operates purely over the outbound/inbound [`MooMessage`] channels `moo::transport` already
-//! exposes — independently testable without a real websocket. Handling inbound `pair`/`unpair`
-//! events and responding to `ping:1` are later steps; this module only gets a registered,
-//! token-holding connection off the ground. Not wired into a connection state machine yet, so
-//! its items are unused outside their own tests.
+//! exposes — independently testable without a real websocket. Responding to `ping:1` is a
+//! later step. Not wired into a connection state machine yet, so its items are unused outside
+//! their own tests.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
@@ -90,15 +90,147 @@ pub(crate) async fn register(
     Ok(serde_json::from_value(body)?)
 }
 
+/// Name of the `com.roonlabs.pairing:1` service this extension must provide (already declared
+/// in `register`'s `provided_services`) so the Core has somewhere to send its pairing
+/// notification.
+pub(crate) const PAIRING_SERVICE: &str = "com.roonlabs.pairing:1";
+
+/// A change in this connection's pairing status. There is no `Unpaired` counterpart here: per
+/// `node-roon-api`'s reference implementation, unpairing has no wire message of its own — the
+/// Core signals it only by closing the connection, which [`PairingState`] never sees. That
+/// disconnect-inferred, known-unreliable path is exactly CLAUDE.md §1's keepalive backstop,
+/// handled where the connection lifecycle itself is tracked, not here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PairingEvent {
+    Paired { core_id: String },
+}
+
+/// State for the `com.roonlabs.pairing:1` service, mirroring `node-roon-api`'s `pairing.js`:
+/// `subscribe_pairing`/`get_pairing` report the current pairing status, and an inbound `pair`
+/// request (sent by the Core when the user pairs this extension in Roon's UI) sets it. A single
+/// MOO connection only ever talks to one Core, so pairing here is a plain yes/no against that
+/// one `core_id` — no per-core bookkeeping needed.
+#[derive(Debug, Default)]
+pub(crate) struct PairingState {
+    paired: bool,
+    /// The request id of an open `subscribe_pairing` subscription, if any — answered with a
+    /// `Changed` CONTINUE when `paired` flips. At most one subscriber: the Core this connection
+    /// belongs to.
+    subscriber: Option<u32>,
+}
+
+impl PairingState {
+    /// Handles one inbound `REQUEST` addressed to [`PAIRING_SERVICE`], replying over
+    /// `outbound_tx` as the wire protocol requires and returning a [`PairingEvent`] the first
+    /// time a `pair` request arrives. `core_id` is this connection's own Core (from the earlier
+    /// `Registered` body) — the `pair` request's body carries no core identity of its own to
+    /// check against, since on a single-Core connection it can only ever mean "this one".
+    pub(crate) fn handle_request(
+        &mut self,
+        outbound_tx: &mpsc::UnboundedSender<MooMessage>,
+        core_id: &str,
+        request: &MooMessage,
+    ) -> Result<Option<PairingEvent>, HandshakeError> {
+        match request.name.as_str() {
+            "com.roonlabs.pairing:1/subscribe_pairing" => {
+                self.subscriber = Some(request.request_id);
+                send_continue(
+                    outbound_tx,
+                    request.request_id,
+                    "Subscribed",
+                    Some(paired_core_id_body(self.paired, core_id)),
+                )?;
+                Ok(None)
+            }
+            "com.roonlabs.pairing:1/unsubscribe_pairing" => {
+                self.subscriber = None;
+                send_complete(outbound_tx, request.request_id, "Unsubscribed", None)?;
+                Ok(None)
+            }
+            "com.roonlabs.pairing:1/get_pairing" => {
+                send_complete(
+                    outbound_tx,
+                    request.request_id,
+                    "Success",
+                    Some(paired_core_id_body(self.paired, core_id)),
+                )?;
+                Ok(None)
+            }
+            // No COMPLETE is sent here, matching node-roon-api: the reference implementation
+            // never answers a `pair` request either, and Roon Cores don't wait on one.
+            "com.roonlabs.pairing:1/pair" => {
+                if self.paired {
+                    return Ok(None);
+                }
+                self.paired = true;
+                if let Some(subscriber) = self.subscriber {
+                    send_continue(
+                        outbound_tx,
+                        subscriber,
+                        "Changed",
+                        Some(paired_core_id_body(true, core_id)),
+                    )?;
+                }
+                Ok(Some(PairingEvent::Paired {
+                    core_id: core_id.to_string(),
+                }))
+            }
+            other => {
+                send_complete(
+                    outbound_tx,
+                    request.request_id,
+                    "InvalidRequest",
+                    Some(serde_json::json!({ "error": format!("unknown request name: {other}") })),
+                )?;
+                Ok(None)
+            }
+        }
+    }
+}
+
+fn paired_core_id_body(paired: bool, core_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "paired_core_id": if paired { serde_json::Value::String(core_id.to_string()) } else { serde_json::Value::Null },
+    })
+}
+
 fn send_request(
     outbound_tx: &mpsc::UnboundedSender<MooMessage>,
     request_id: u32,
     name: &'static str,
     body: Option<serde_json::Value>,
 ) -> Result<(), HandshakeError> {
+    send(outbound_tx, MooVerb::Request, request_id, name, body)
+}
+
+fn send_continue(
+    outbound_tx: &mpsc::UnboundedSender<MooMessage>,
+    request_id: u32,
+    name: &'static str,
+    body: Option<serde_json::Value>,
+) -> Result<(), HandshakeError> {
+    send(outbound_tx, MooVerb::Continue, request_id, name, body)
+}
+
+fn send_complete(
+    outbound_tx: &mpsc::UnboundedSender<MooMessage>,
+    request_id: u32,
+    name: &'static str,
+    body: Option<serde_json::Value>,
+) -> Result<(), HandshakeError> {
+    send(outbound_tx, MooVerb::Complete, request_id, name, body)
+}
+
+fn send(
+    outbound_tx: &mpsc::UnboundedSender<MooMessage>,
+    verb: MooVerb,
+    request_id: u32,
+    name: &'static str,
+    body: Option<serde_json::Value>,
+) -> Result<(), HandshakeError> {
     outbound_tx
         .send(MooMessage {
-            verb: MooVerb::Request,
+            verb,
             name: name.to_string(),
             request_id,
             headers: HashMap::new(),
@@ -314,5 +446,205 @@ mod tests {
         .expect("registration succeeds");
 
         server.await.expect("server task");
+    }
+
+    fn pairing_request(name: &str, request_id: u32) -> MooMessage {
+        MooMessage {
+            verb: MooVerb::Request,
+            name: name.to_string(),
+            request_id,
+            headers: HashMap::new(),
+            body: None,
+        }
+    }
+
+    #[test]
+    fn subscribe_pairing_reports_null_before_pairing() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let mut state = PairingState::default();
+
+        let event = state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/subscribe_pairing", 5),
+            )
+            .expect("handled");
+        assert_eq!(event, None);
+
+        let reply = outbound_rx.try_recv().expect("a reply was sent");
+        assert_eq!(reply.verb, MooVerb::Continue);
+        assert_eq!(reply.name, "Subscribed");
+        assert_eq!(reply.request_id, 5);
+        assert_eq!(
+            reply.body,
+            Some(MooBody::Json(serde_json::json!({ "paired_core_id": null })))
+        );
+    }
+
+    #[test]
+    fn pair_request_emits_paired_event_and_notifies_subscriber() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let mut state = PairingState::default();
+
+        state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/subscribe_pairing", 5),
+            )
+            .expect("handled");
+        outbound_rx.try_recv().expect("Subscribed reply"); // drain it
+
+        let event = state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/pair", 6),
+            )
+            .expect("handled");
+        assert_eq!(
+            event,
+            Some(PairingEvent::Paired {
+                core_id: "core-1".to_string()
+            })
+        );
+
+        // Notifies the still-open subscription, addressed by its own request id — not the
+        // `pair` request's.
+        let notification = outbound_rx.try_recv().expect("a Changed notification");
+        assert_eq!(notification.verb, MooVerb::Continue);
+        assert_eq!(notification.name, "Changed");
+        assert_eq!(notification.request_id, 5);
+        assert_eq!(
+            notification.body,
+            Some(MooBody::Json(
+                serde_json::json!({ "paired_core_id": "core-1" })
+            ))
+        );
+
+        // No COMPLETE for the `pair` request itself — matches node-roon-api, which never
+        // answers one either.
+        assert!(outbound_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn pair_request_is_idempotent_once_paired() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let mut state = PairingState::default();
+
+        state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/pair", 1),
+            )
+            .expect("handled");
+        let second = state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/pair", 2),
+            )
+            .expect("handled");
+
+        assert_eq!(second, None, "already paired, second pair is a no-op");
+        assert!(
+            outbound_rx.try_recv().is_err(),
+            "no subscriber was ever registered, so nothing should have been sent"
+        );
+    }
+
+    #[test]
+    fn get_pairing_reports_core_id_once_paired() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let mut state = PairingState::default();
+
+        state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/pair", 1),
+            )
+            .expect("handled");
+
+        state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/get_pairing", 2),
+            )
+            .expect("handled");
+
+        let reply = outbound_rx.try_recv().expect("a reply was sent");
+        assert_eq!(reply.verb, MooVerb::Complete);
+        assert_eq!(reply.name, "Success");
+        assert_eq!(reply.request_id, 2);
+        assert_eq!(
+            reply.body,
+            Some(MooBody::Json(
+                serde_json::json!({ "paired_core_id": "core-1" })
+            ))
+        );
+    }
+
+    #[test]
+    fn unsubscribe_pairing_stops_future_change_notifications() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let mut state = PairingState::default();
+
+        state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/subscribe_pairing", 5),
+            )
+            .expect("handled");
+        outbound_rx.try_recv().expect("Subscribed reply");
+
+        state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/unsubscribe_pairing", 7),
+            )
+            .expect("handled");
+        let unsubscribed = outbound_rx.try_recv().expect("Unsubscribed reply");
+        assert_eq!(unsubscribed.verb, MooVerb::Complete);
+        assert_eq!(unsubscribed.name, "Unsubscribed");
+        assert_eq!(unsubscribed.request_id, 7);
+
+        state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/pair", 8),
+            )
+            .expect("handled");
+
+        assert!(
+            outbound_rx.try_recv().is_err(),
+            "no subscriber left to notify"
+        );
+    }
+
+    #[test]
+    fn unknown_pairing_request_gets_invalid_request() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let mut state = PairingState::default();
+
+        let event = state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/frobnicate", 9),
+            )
+            .expect("handled");
+        assert_eq!(event, None);
+
+        let reply = outbound_rx.try_recv().expect("a reply was sent");
+        assert_eq!(reply.verb, MooVerb::Complete);
+        assert_eq!(reply.name, "InvalidRequest");
+        assert_eq!(reply.request_id, 9);
     }
 }
