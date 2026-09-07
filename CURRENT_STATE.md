@@ -131,15 +131,24 @@ dissonanza/
   handshake, the inbound `com.roonlabs.pairing:1`/`com.roonlabs.ping:1` services, the app-level
   keepalive staleness check, the connection state machine and public `Connection` API wiring all
   of it together, and now reconnect-on-disconnect are done (see Modules above) — Phase 3 is
-  complete. Still to build: the Phase 4 end-to-end integration test (fake SOOD responder + mock
-  MOO/WS server driving a real `Connection` through `Discovering → Connecting → Registering →
-  Paired`, and now also through a reconnect cycle) and the `feature/roon-connection-core` →
-  `develop` merge. Also open: pairing-token persistence, reconnect has no backoff yet (a
-  disconnect that fails immediately and repeatedly — e.g. interface enumeration erroring on every
-  attempt — loops back to `Discovering` with no delay; not part of 3.3's scoped behavior, flagged
-  here rather than silently added), and the discovery-keeps-running-as-a-fallback-while-paired
-  question noted under `sood::discovery` above (distinct from reconnect-after-disconnect, which is
-  now done).
+  complete. Phase 4.1's originally-planned automated end-to-end integration test (fake SOOD
+  responder + mock MOO/WS server driving a real `Connection` through `Discovering → Connecting →
+  Registering → Paired`) was attempted and found **not safely runnable** — descoped, not done; see
+  the dated entry below for the full finding. Discovery-to-pairing coverage instead rests on the
+  existing per-module unit tests (49 passing) plus manual verification against a real Core.
+  Remaining: whichever of these paths the user picks for 4.1 (accept unit-test-only coverage as
+  the final state, or design a real test seam into `connection` — a scope decision, not
+  something to guess at), then the `feature/roon-connection-core` → `develop` merge (4.2). Also
+  open: pairing-token persistence, reconnect has no backoff yet (a disconnect that fails
+  immediately and repeatedly — e.g. interface enumeration erroring on every attempt — loops back
+  to `Discovering` with no delay; not part of 3.3's scoped behavior, flagged here rather than
+  silently added), the discovery-keeps-running-as-a-fallback-while-paired question noted under
+  `sood::discovery` above (distinct from reconnect-after-disconnect, which is now done), and a
+  newly-found gap in `moo::handshake::register` (see dated entry below): it never sends
+  `required_services`/`optional_services` in the registration body, though
+  `docs/protocol/sood-moo.md` documents both as expected alongside `provided_services` — plausibly
+  why a real Core closes the connection right after `register` rather than creating a pending
+  Settings → Extensions entry.
   - ~~Custom Rust SOOD/MOO protocol implementation needs its own wire-protocol study~~ — **done**, see
     [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md): packet/message formats, the
     connection/registration/pairing handshake, and the keepalive rationale behind CLAUDE.md §1,
@@ -159,6 +168,29 @@ dissonanza/
 
 ## Recently changed
 
+- Attempted Phase 4.1's automated end-to-end integration test, descoped as unsafe (2026-09-07):
+  built `core/tests/roon_connection_handshake.rs` — a fake local SOOD responder + mock local
+  MOO/WS server (hand-rolled against `docs/protocol/sood-moo.md`'s wire format directly, since
+  `sood`/`moo` are private modules per CLAUDE.md §1 and the test can only reach `Connection`'s
+  public API) driving a real `Connection` through `Discovering → Connecting → Registering →
+  Paired`, `#[ignore]`d by default per an explicit user decision (SOOD discovery has no test seam:
+  real multicast, on every local interface, first-reply-wins, so a real Roon Core reachable on the
+  network could race the fake one). Running it (with the user's explicit go-ahead, after they
+  separately enabled multicast on `lo` — a machine-level `ip link set lo multicast on`, not a repo
+  change) confirmed the risk is real, not theoretical: `Connection` connected to something other
+  than the fake local server both before and after the `lo` fix, completing a real
+  `registry:1/info` round trip before the connection closed — consistent with a real Roon Core on
+  the LAN. No pending entry appeared in that Core's Settings → Extensions, which is itself a new
+  finding rather than proof of safety: `moo::handshake::register`'s body never sends
+  `required_services`/`optional_services` (only `provided_services`), though
+  `docs/protocol/sood-moo.md` documents all three as expected — plausibly why a real Core rejects
+  the malformed body outright rather than creating a visible pending-pairing entry. Given the real
+  Core reliably won the discovery race even with the fake responder reachable over loopback, the
+  test was judged not safely re-runnable on a network with a real Core present (this developer's,
+  concretely) and was deleted rather than left as a `--ignored` trap for a future run. Discovery-
+  to-pairing coverage for now rests on the existing per-module unit tests plus manual verification
+  against a real Core — Phase 4.1 is open again pending the user's choice between accepting that as
+  final, or scoping a real test seam into `connection` as separate follow-up work.
 - Added reconnect-on-disconnect (2026-09-07): `core::roon::connection::run` (the task body behind
   `Connection::spawn`) now loops — on any disconnect other than `ConnectionHandle::shutdown`
   (transport closed, keepalive went stale, a step failed), it reports `Disconnected` and then
