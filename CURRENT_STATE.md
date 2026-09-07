@@ -37,7 +37,7 @@ dissonanza/
 │                   ├── mod.rs
 │                   ├── message.rs   # MooMessage/MooVerb/MooBody/MooError — message framing, pure parsing
 │                   ├── transport.rs # websocket connect, MOO frame send/receive, WS ping/pong keepalive
-│                   └── handshake.rs # registry:1/info + /register handshake, parses Registered body
+│                   └── handshake.rs # registry:1/info + /register handshake; pairing:1 + ping:1 service responders
 ├── app/                  # `dissonanza` crate (binary) — Slint UI shell, depends on core's public API
 │   └── src/
 │       └── main.rs           # trivial placeholder, no Slint wired up yet
@@ -90,10 +90,12 @@ dissonanza/
     this extension in Roon's UI) sets it and emits `PairingEvent::Paired`. There is no `unpair`
     wire message — per `node-roon-api`, unpairing is inferred purely from the moo connection
     closing, so it's handled where connection lifecycle is tracked (Phase 3's keepalive/
-    reconnect), not here. Operates purely over `mpsc` channels shaped like `moo::transport`'s, so
-    it's tested without a real websocket. Exposes `register(...)` and
-    `PairingState::handle_request(...)`, not yet called by anything. The `ping:1` responder is
-    still a separate, not-yet-started step.
+    reconnect), not here. Also implements the `com.roonlabs.ping:1` service this extension
+    provides in return (`handle_ping_request`, stateless): replies `COMPLETE Success` to an
+    inbound `ping` request, distinct from the WS-level ping/pong `moo::transport` already runs.
+    Operates purely over `mpsc` channels shaped like `moo::transport`'s, so it's tested without a
+    real websocket. Exposes `register(...)`, `PairingState::handle_request(...)`, and
+    `handle_ping_request(...)`, not yet called by anything.
   - `connection::config` — `ConnectionConfig` (`extension_id`, `display_name`, `display_version`,
     `publisher`, `email`, optional `website`): the extension identity `moo::handshake::register`
     sends during registration.
@@ -103,13 +105,14 @@ dissonanza/
 - `core::roon::connection` implementation in progress on `feature/roon-connection-core` (branched from
   a new `develop`, per CLAUDE.md's git workflow): SOOD TLV parsing, the SOOD multicast discovery
   loop, MOO message framing, the MOO websocket transport, the MOO registry registration
-  handshake, and the inbound `com.roonlabs.pairing:1` service (handling `pair` requests) are done
-  (see Modules above). Still to build: the `ping:1` responder, the app-level keepalive on top of
-  `core_paired`/`core_unpaired` (including the disconnect-inferred "unpair" path — there's no
-  wire message for it, see the `moo::handshake` entry above), reconnect-on-disconnect, and the
-  public `Connection` API tying it all together — none of these are wired up yet, and
-  `sood::discovery::run`/`moo::transport::run`/`moo::handshake::register`/
-  `moo::handshake::PairingState::handle_request` aren't called by anything yet.
+  handshake, and the inbound `com.roonlabs.pairing:1`/`com.roonlabs.ping:1` services (handling
+  `pair` and `ping` requests) are done (see Modules above) — Phase 2 of the implementation plan is
+  complete. Still to build: the app-level keepalive on top of `core_paired`/`core_unpaired`
+  (including the disconnect-inferred "unpair" path — there's no wire message for it, see the
+  `moo::handshake` entry above), reconnect-on-disconnect, and the public `Connection` API tying it
+  all together — none of these are wired up yet, and `sood::discovery::run`/`moo::transport::run`/
+  `moo::handshake::register`/`moo::handshake::PairingState::handle_request`/
+  `moo::handshake::handle_ping_request` aren't called by anything yet.
   - ~~Custom Rust SOOD/MOO protocol implementation needs its own wire-protocol study~~ — **done**, see
     [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md): packet/message formats, the
     connection/registration/pairing handshake, and the keepalive rationale behind CLAUDE.md §1,
@@ -129,6 +132,12 @@ dissonanza/
 
 ## Recently changed
 
+- Added the `com.roonlabs.ping:1` responder (2026-09-07): `core::roon::connection::moo::handshake::handle_ping_request`
+  replies `COMPLETE Success` to an inbound `ping` request, unknown request names get
+  `InvalidRequest` (matching the `com.roonlabs.pairing:1` handler's own fallback). Stateless, so
+  no struct like `PairingState` was needed. This was the last piece of Phase 2 (MOO transport &
+  handshake) in the implementation plan — connection-establishment protocol work now moves to
+  Phase 3 (keepalive, state machine, reconnect). Not wired into a connection state machine yet.
 - Added the inbound `com.roonlabs.pairing:1` service handler (2026-09-07):
   `core::roon::connection::moo::handshake::PairingState` responds to `subscribe_pairing`/
   `unsubscribe_pairing`/`get_pairing` with current pairing status and, on an inbound `pair`
