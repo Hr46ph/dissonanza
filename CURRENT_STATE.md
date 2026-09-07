@@ -260,6 +260,14 @@ dissonanza/
   unit tests, `clippy -- -D warnings`, `fmt --check` all clean). Non-goals for this phase: zone
   grouping/ungrouping (wire shape documented anyway in the Phase 0 study, implementation deferred),
   `browse:1`/`image:1`, Slint UI, multi-zone/multi-Core (permanent, per NORTH-STAR.md).
+- `core::roon::browse` (`com.roonlabs.browse:1` — sidebar categories, browse paths, search): planned in
+  [IMPL_BROWSE.md](IMPL_BROWSE.md), chosen per user decision (2026-09-07) as the next vertical slice after
+  `transport`, the other major leg of NORTH-STAR.md's "every sidebar category, browse path" parity goal.
+  Phase 0 (wire-protocol study) is **done**, see [docs/protocol/browse.md](docs/protocol/browse.md) — it
+  resolved the plan's open architectural question (no internal session/paging state needed;
+  `browse`/`load` are stateless request/response pairs from this module's point of view, the actual
+  browse-stack state lives Core-side). A Phase 1+ design sketch is written into IMPL_BROWSE.md but not
+  yet confirmed with the user or split into numbered Gate-1 steps — no code changes yet.
 - Slint GUI: not started (app/src/main.rs is a trivial placeholder).
 - Pairing-token persistence (so a paired extension doesn't have to re-pair on every restart) is
   deferred until a cache-store phase exists — the MOO handshake step will hold it in memory only.
@@ -271,6 +279,31 @@ dissonanza/
 
 ## Recently changed
 
+- Completed the `com.roonlabs.browse:1` wire-protocol study (2026-09-07):
+  [docs/protocol/browse.md](docs/protocol/browse.md) — IMPL_BROWSE.md's Phase 0. Covers the `List`/`Item`/
+  `InputPrompt` data model, the `browse`/`load` request/response envelope (both one-shot, single-`COMPLETE`
+  RPCs — no subscription/`CONTINUE` stream anywhere in this service, unlike `transport:2`'s zones), and the
+  `hierarchy`/`multi_session_key` session model. Sourced from `RoonLabs/node-roon-api-browse`'s `lib.js`
+  (primary/normative) cross-checked against `shin1ohno/roon-rs` and `TheAppgineer/rust-roon-api`'s browse
+  modules, same sourcing approach as `sood-moo.md`/`transport.md`. Key finding, resolving IMPL_BROWSE.md's
+  open architectural question: because browse-stack state lives entirely on the Core (keyed by
+  `hierarchy`/`multi_session_key`, not held by the client) and `core::roon::browse` will call
+  `ConnectionRequests::send_request` directly per request (an `async fn` scoped to one call, unlike the JS
+  SDK's callback-registry model), the module needs no internal session/paging state of its own — the
+  caller already knows which session it used at the point it awaits the response. Flags one scope
+  divergence (`TheAppgineer/rust-roon-api` hardcodes `hierarchy: "browse"` internally rather than exposing
+  it as a parameter — a limitation in that port, not a protocol constraint) and one unconfirmed gap (no
+  source states whether a Core-side browse-stack position survives a `connection` reconnect). No code
+  changes; a Phase 1+ design sketch was added to IMPL_BROWSE.md but needs confirmation before being split
+  into numbered Gate-1 steps.
+- Drafted `IMPL_BROWSE.md` (2026-09-07): chosen per user decision as the next vertical slice —
+  `com.roonlabs.browse:1`, over `image:1` and starting the Slint UI first — since `browse:1` is the other
+  major leg of NORTH-STAR.md's parity goal alongside the now-complete `transport:2`, and a browse-capable
+  Slint UI needs it before there's much to display. Only Phase 0 (the wire-protocol study, mirroring
+  `sood-moo.md`/`transport.md`) is written and Gate-1 accepted; the module's own design (in particular,
+  how much of `browse:1`'s per-session paging state to track internally) is flagged as an open question
+  deferred until that study exists, per the same study-first precedent `IMPL_TRANSPORT.md` set. No code
+  changes yet.
 - Archived the completed transport implementation plan (2026-09-07): moved `IMPL_TRANSPORT.md` to
   [docs/IMPL_TRANSPORT.md](docs/IMPL_TRANSPORT.md) now that all five phases are done (see Open work
   above) — kept for reference, not deleted, same precedent as `IMPL_CORE_CONNECTION.md`'s archival.
