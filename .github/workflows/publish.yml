@@ -90,12 +90,13 @@ jobs:
   publish-aur:
     needs: publish-github-release
     runs-on: ubuntu-latest
-    # Skips quietly until AUR_SSH_PRIVATE_KEY is configured as a repo secret
-    # (see RELEASES.md — the AUR package also needs a one-time manual push first).
-    if: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
+      # Skips quietly until AUR_SSH_PRIVATE_KEY is configured as a repo secret
+      # (see RELEASES.md — the AUR package also needs a one-time manual push first).
+      # `secrets` can't be read in a job-level `if:`, only a step-level one.
       - name: Push updated PKGBUILD to AUR
+        if: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}
         uses: KSXGit/github-actions-deploy-aur@v3
         with:
           pkgname: dissonanza
