@@ -258,11 +258,12 @@ dissonanza/
   request/response multiplexing seam) are done, see the `core::roon::connection` entry above. Phase 2
   (zone subscription & state model) is done too, see the `core::roon::transport` entry above. Phase 3
   (playback controls: `control`/`seek`) is now **done** too, see the `transport::control` entry above.
-  Phase 4 (volume/output controls: `change_volume`/`mute`/`standby`) is now **done** too, same module —
-  still on `feature/roon-transport` (branched from `develop`), not yet merged. Phase 5 (verification &
-  merge into `develop`) is next. Non-goals for this phase: zone grouping/ungrouping (wire shape
-  documented anyway in the Phase 0 study, implementation deferred), `browse:1`/`image:1`, Slint UI,
-  multi-zone/multi-Core (permanent, per NORTH-STAR.md).
+  Phase 4 (volume/output controls: `change_volume`/`mute`/`standby`) is now **done** too, same module.
+  Phase 5 (verification & merge) is now **done** too — all four `cargo` gates green (81 unit tests,
+  `clippy -- -D warnings`, `fmt --check` all clean) — `IMPL_TRANSPORT.md`'s plan is complete as of the
+  `feature/roon-transport` → `develop` merge recorded below. Non-goals for this phase: zone
+  grouping/ungrouping (wire shape documented anyway in the Phase 0 study, implementation deferred),
+  `browse:1`/`image:1`, Slint UI, multi-zone/multi-Core (permanent, per NORTH-STAR.md).
 - Slint GUI: not started (app/src/main.rs is a trivial placeholder).
 - Pairing-token persistence (so a paired extension doesn't have to re-pair on every restart) is
   deferred until a cache-store phase exists — the MOO handshake step will hold it in memory only.
