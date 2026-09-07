@@ -7,7 +7,7 @@ supported API.
 
 I picked this name because it carries symbolism in the absence of a native Linux client despite there being a demand for one.
 
-For those interrested, here are a few examples of classic and popular pieces that use dissonance deliberately.
+For those interrested, here are a few examples of classical and popular pieces that use dissonance deliberately.
 
 | # | Composer | Work | How dissonance is used |
 |---|---|---|---|
@@ -48,14 +48,6 @@ cargo build
 ```
 
 Requires a recent stable Rust toolchain (2024 edition).
-
-## Documentation
-
-- [NORTH-STAR.md](NORTH-STAR.md) — long-term vision and non-goals.
-- [TECH_STACK.md](TECH_STACK.md) — chosen stack and rationale.
-- [CURRENT_STATE.md](CURRENT_STATE.md) — living project map.
-- [RELEASES.md](RELEASES.md) — versioning, changelog, and release process.
-- [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md) — SOOD/MOO wire-protocol study.
 
 ## License
 
