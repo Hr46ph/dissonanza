@@ -27,13 +27,16 @@ dissonanza/
 │       └── roon/
 │           ├── mod.rs           # pub mod connection;
 │           └── connection/      # sole owner of Core discovery/pairing/keepalive (CLAUDE.md §1)
-│               ├── mod.rs           # PUBLIC surface: Connection, ConnectionHandle, ConnectionConfig,
-│               │                    #   ConnectionEvent, ConnectionState, ConnectionError (+ DiscoveryError/
-│               │                    #   TransportError/HandshakeError re-exports). sood/moo stay private.
+│               ├── mod.rs           # PUBLIC surface: Connection, ConnectionHandle, ConnectionRequests,
+│               │                    #   ConnectionConfig, ConnectionEvent, ConnectionState, ConnectionError
+│               │                    #   (+ DiscoveryError/TransportError/HandshakeError re-exports),
+│               │                    #   MooMessage/MooVerb/MooBody re-exports. sood/moo stay private.
 │               ├── config.rs        # ConnectionConfig — extension identity for MOO registration
 │               ├── state.rs         # ConnectionState, ConnectionEvent
 │               ├── error.rs         # ConnectionError — wraps DiscoveryError/TransportError/HandshakeError
 │               ├── keepalive.rs     # Keepalive — app-level staleness health-check
+│               ├── requests.rs      # ConnectionRequests/MooResponseStream/ConnectionRequestError — generic
+│               │                    #   MOO request/response multiplexing for other core::roon modules
 │               ├── sood/            # private: SOOD discovery, never `pub` outside `connection`
 │               │   ├── mod.rs
 │               │   ├── message.rs   # SoodMessage/SoodMessageType/SoodError — TLV codec, pure parsing
@@ -71,7 +74,7 @@ dissonanza/
 
 - **`core::roon::connection`** (`core/src/roon/connection/`) — per CLAUDE.md §1, the sole owner of
   Core discovery, `core_paired`/`core_unpaired` handling, keepalive, and reconnect. Has a
-  public API: `Connection::spawn(ConnectionConfig) -> (ConnectionHandle,
+  public API: `Connection::spawn(ConnectionConfig) -> (ConnectionHandle, ConnectionRequests,
   mpsc::UnboundedReceiver<ConnectionEvent>)` wires discovery → MOO connect → registry handshake →
   the pairing:1/ping:1 request loop → keepalive into one task, looping back to a fresh
   `Discovering` pass on any disconnect (transport closed, keepalive stale, a step failed) until
@@ -79,6 +82,23 @@ dissonanza/
   a Core's address is never redialed, per CLAUDE.md's mandatory technical choices. `sood`/`moo`
   stay private modules (only reachable from `connection` itself, via `pub(super)`) — nothing
   outside this module calls them directly.
+  - `connection::requests` — `ConnectionRequests`: a `Clone`-able handle (IMPL_TRANSPORT.md Phase
+    1, done) other `core::roon` modules use to send their own MOO requests
+    (`send_request(name, body) -> Result<MooResponseStream, ConnectionRequestError>`) over
+    whichever connection is currently past the registry handshake, without `connection` needing to
+    know about `transport:2`/`browse:1`/etc. specifically. Backed by a command channel into
+    `run_until_disconnected`'s request loop (a fresh dispatch table + command channel per
+    connection attempt, request-ids allocated from `3` since `handshake::register` reserves `1`
+    and `2`), published through a `watch` cell that's `None` whenever no connection is up.
+    `MooResponseStream` yields the `CONTINUE`/`COMPLETE`s for one request and ends (`recv` returns
+    `None`) on `COMPLETE` or on disconnect alike — a caller with an open subscription sees it end
+    exactly like a finished one-shot request, so re-issuing it after the next `Paired` is always
+    the caller's own job, never automatic, matching `docs/protocol/transport.md`'s reconnect
+    finding. Cleanup of an abandoned stream (dropped without unsubscribing) is lazy: reaped the
+    next time a message for it fails to forward, not proactively on drop — a flagged, minor known
+    gap, not built out further until shown to matter. `MooMessage`/`MooVerb`/`MooBody` are
+    re-exported from `connection` (promoted from private) as this surface's response type, rather
+    than a parallel public type.
   - `connection::state` — `ConnectionState` (`Discovering`, `Connecting`, `Registering`,
     `Paired { core_id }`, `Disconnected`) and `ConnectionEvent` (`StateChanged`, `Error`), emitted
     on `Connection::spawn`'s event channel.
@@ -160,20 +180,15 @@ dissonanza/
 - `core::roon::transport` (`com.roonlabs.transport:2` — zone list, now-playing, playback control):
   planned in [IMPL_TRANSPORT.md](IMPL_TRANSPORT.md), chosen per user decision (2026-09-07) as the next
   vertical slice after `connection`. Phase 0 (wire-protocol study) is done, see
-  [docs/protocol/transport.md](docs/protocol/transport.md). No code exists yet. Phase 1's design (how
-  `transport` sends/receives its own MOO traffic over the already-paired connection, and re-subscribes
-  after a reconnect, without `connection` needing to know about `transport:2` specifically — connection
-  state itself stays `connection`'s alone, per CLAUDE.md §1) is now resolved and **Gate-1 accepted** with
-  two numbered steps, see IMPL_TRANSPORT.md's Phase 1: a command channel into `run_until_disconnected`'s
-  existing loop plus a new `Clone`-able `ConnectionRequests` handle (kept separate from
-  `ConnectionHandle`, whose `shutdown` stays single-owner, so any number of future service modules can
-  each hold their own clone). Reconnect handling for an active subscription falls out of the mechanism's
-  own lifetimes (a fresh dispatch table/command channel per connection attempt, dropped on disconnect)
-  rather than needing an explicit signal. No code written yet. Phases 2-4's fine steps are still
-  intentionally not written, per the same study-first precedent `docs/IMPL_CORE_CONNECTION.md` set — they
-  depend on Phase 1 actually landing first. Non-goals for this phase: zone grouping/ungrouping (wire shape
-  documented anyway in the Phase 0 study, implementation deferred), `browse:1`/`image:1`, Slint UI,
-  multi-zone/multi-Core (permanent, per NORTH-STAR.md).
+  [docs/protocol/transport.md](docs/protocol/transport.md). Phase 1 (the `connection`-side
+  request/response multiplexing seam `transport` needs — `connection::requests`, see the
+  `core::roon::connection` entry above) is **done**, on `feature/roon-transport` (branched from
+  `develop`), not yet merged. `core::roon::transport` itself still doesn't exist — Phase 1 only built
+  the seam it will use. Phases 2-4's fine steps are still intentionally not written, per the same
+  study-first precedent `docs/IMPL_CORE_CONNECTION.md` set — Phase 2 (zone subscription & state model)
+  is next. Non-goals for this phase: zone grouping/ungrouping (wire shape documented anyway in the
+  Phase 0 study, implementation deferred), `browse:1`/`image:1`, Slint UI, multi-zone/multi-Core
+  (permanent, per NORTH-STAR.md).
 - Slint GUI: not started (app/src/main.rs is a trivial placeholder).
 - Pairing-token persistence (so a paired extension doesn't have to re-pair on every restart) is
   deferred until a cache-store phase exists — the MOO handshake step will hold it in memory only.
@@ -185,6 +200,26 @@ dissonanza/
 
 ## Recently changed
 
+- Added `connection::requests` for generic MOO request/response multiplexing (2026-09-07):
+  IMPL_TRANSPORT.md Phase 1, on `feature/roon-transport` (branched from `develop`). Step 1.1
+  re-exports `MooMessage`/`MooVerb`/`MooBody` from `connection` (were already `pub` within
+  `moo::message`, just unreachable from outside `connection` since `moo` stays private per
+  CLAUDE.md §1). Step 1.2 adds `ConnectionRequests` (a new `Clone`-able handle, deliberately
+  separate from `ConnectionHandle` so any number of future service modules can each hold their own
+  clone for the app's whole lifetime while `ConnectionHandle::shutdown` keeps its single-owner,
+  consuming shape) plus `MooResponseStream`/`ConnectionRequestError`, wired into
+  `run_until_disconnected`'s existing `tokio::select!` loop via a command channel and a per-connection
+  request-id/dispatch table (ids start at `3`, since `handshake::register` already hardcodes `1`/`2`
+  for its own two steps). `Connection::spawn` now returns `(ConnectionHandle, ConnectionRequests,
+  EventReceiver)` — no other call site exists yet to update. Design was confirmed with the user first
+  (resolving IMPL_TRANSPORT.md's until-now-deferred Phase 1 open architectural question): reconnect
+  handling needs no explicit signal, since the dispatch table and command channel are both local to
+  one `run_until_disconnected` call and drop when it returns, closing every open response stream —
+  a caller with an active subscription sees it end exactly like a finished one-shot request. Added
+  `handle_command`/`dispatch_response` as small standalone functions specifically so this could be
+  unit-tested the same way `moo::handshake` already is, purely over `mpsc`/`watch` channels, no live
+  Core needed (9 new tests, 58 total). `core::roon::transport` itself still doesn't exist; this only
+  built the seam it will use — Phase 2 (zone subscription & state model) is next.
 - Completed the `com.roonlabs.transport:2` wire-protocol study (2026-09-07):
   [docs/protocol/transport.md](docs/protocol/transport.md) — IMPL_TRANSPORT.md's Phase 0. Covers the
   `Zone`/`Output`/`Volume`/`NowPlaying`/`QueueItem` data model, `subscribe_zones`/`subscribe_outputs`/
