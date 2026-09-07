@@ -133,12 +133,13 @@ dissonanza/
   of it together, and now reconnect-on-disconnect are done (see Modules above) — Phase 3 is
   complete. Phase 4.1's originally-planned automated end-to-end integration test (fake SOOD
   responder + mock MOO/WS server driving a real `Connection` through `Discovering → Connecting →
-  Registering → Paired`) was attempted and found **not safely runnable** — descoped, not done; see
-  the dated entry below for the full finding. Discovery-to-pairing coverage instead rests on the
-  existing per-module unit tests (49 passing) plus manual verification against a real Core.
-  Remaining: whichever of these paths the user picks for 4.1 (accept unit-test-only coverage as
-  the final state, or design a real test seam into `connection` — a scope decision, not
-  something to guess at), then the `feature/roon-connection-core` → `develop` merge (4.2). Also
+  Registering → Paired`) was attempted and found **not safely runnable** — see the dated entry
+  below for the full finding. **Resolved by user decision**: unit-test-only coverage (the existing
+  49 per-module unit tests plus manual verification against a real Core) is accepted as final for
+  this module — no further automated E2E test is planned. Phase 4 — and with it, this entire
+  implementation plan (`IMPL_CORE_CONNECTION.md`) — is complete as of the
+  `feature/roon-connection-core` → `develop` merge (4.2) recorded below. A real test seam for
+  `connection` remains a possible, undecided future improvement, not committed work. Also
   open: pairing-token persistence, reconnect has no backoff yet (a disconnect that fails
   immediately and repeatedly — e.g. interface enumeration erroring on every attempt — loops back
   to `Discovering` with no delay; not part of 3.3's scoped behavior, flagged here rather than
@@ -168,6 +169,12 @@ dissonanza/
 
 ## Recently changed
 
+- Accepted unit-test-only coverage as final for Phase 4.1 (2026-09-07): per user decision, no
+  further automated end-to-end test is planned for `core::roon::connection` — the existing 49
+  per-module unit tests plus manual verification against a real Core stand as this module's test
+  coverage. Closes out the open decision from the previous entry below. Phase 4 (and
+  `IMPL_CORE_CONNECTION.md`'s whole plan) is now complete, pending only the
+  `feature/roon-connection-core` → `develop` merge (4.2).
 - Attempted Phase 4.1's automated end-to-end integration test, descoped as unsafe (2026-09-07):
   built `core/tests/roon_connection_handshake.rs` — a fake local SOOD responder + mock local
   MOO/WS server (hand-rolled against `docs/protocol/sood-moo.md`'s wire format directly, since
