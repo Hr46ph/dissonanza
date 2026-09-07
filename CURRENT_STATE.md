@@ -48,14 +48,16 @@ dissonanza/
 │                   └── handshake.rs # registry:1/info + /register handshake; pairing:1 + ping:1 service responders
 │           └── transport/       # com.roonlabs.transport:2 client — Core-provided, this extension consumes it
 │               ├── mod.rs           # PUBLIC surface: model types, TransportError, subscribe_zones/ZoneEvent/
-│               │                    #   ZoneSeekChange/ZoneSubscription, control/seek/ControlAction/SeekHow
+│               │                    #   ZoneSeekChange/ZoneSubscription, control/seek/ControlAction/SeekHow,
+│               │                    #   change_volume/mute/standby/ChangeVolumeHow/MuteHow
 │               ├── model.rs         # Zone/Output/ZoneState/ZoneSettings/LoopMode/NowPlaying/OneLine/TwoLine/
 │               │                    #   ThreeLine/SourceControl/SourceControlStatus/Volume/VolumeType — pure
 │               │                    #   serde::Deserialize types, no I/O
 │               ├── error.rs         # TransportError — this module's own aggregate error type
 │               ├── zones.rs         # subscribe_zones, ZoneEvent/ZoneSeekChange, ZoneSubscription — built on
 │               │                    #   connection::ConnectionRequests, never touches SOOD/pairing/reconnect
-│               └── control.rs       # control/seek one-shot playback verbs, ControlAction/SeekHow — same
+│               └── control.rs       # control/seek/change_volume/mute/standby one-shot verbs,
+│                                    #   ControlAction/SeekHow/ChangeVolumeHow/MuteHow — same
 │                                    #   ConnectionRequests-only, no SOOD/pairing/reconnect pattern as zones.rs
 ├── app/                  # `dissonanza` crate (binary) — Slint UI shell, depends on core's public API
 │   └── src/
@@ -211,7 +213,13 @@ dissonanza/
     `TransportError::NoResponse { name }`. No subscription/reconnect handling needed — these are
     one-shot requests, not subscriptions. `control`/`seek` themselves aren't separately tested
     beyond type-checking plus a couple of enum-serialization-shape assertions, same precedent
-    `subscribe_zones` set.
+    `subscribe_zones` set. Phase 4 (done, same module) added `change_volume(&ConnectionRequests,
+    output_id, ChangeVolumeHow, value: f64) -> Result<(), TransportError>` (`value` is a float per
+    the wire study, not the `i32` one community Rust port uses), `mute(&ConnectionRequests,
+    output_id, MuteHow)`, and `standby(&ConnectionRequests, output_id, control_key: Option<&str>)`
+    — all output-scoped, all thin wrappers reusing `await_command_response`/`parse_command_response`
+    unchanged, no new `TransportError` variants needed since Phase 3 already generalized
+    `UnexpectedResponse` for this reuse.
 
 ## Open work
 
@@ -249,12 +257,12 @@ dissonanza/
   vertical slice after `connection`. Phase 0 (wire-protocol study) and Phase 1 (the `connection`-side
   request/response multiplexing seam) are done, see the `core::roon::connection` entry above. Phase 2
   (zone subscription & state model) is done too, see the `core::roon::transport` entry above. Phase 3
-  (playback controls: `control`/`seek`) is now **done** too, see the `transport::control` entry above —
-  still on `feature/roon-transport` (branched from `develop`), not yet merged. Phase 4 (volume/output
-  controls: `change_volume`/`mute`/`standby`) is next; its fine steps are still intentionally not
-  written, per the same study-first precedent `docs/IMPL_CORE_CONNECTION.md` set. Non-goals for this
-  phase: zone grouping/ungrouping (wire shape documented anyway in the Phase 0 study, implementation
-  deferred), `browse:1`/`image:1`, Slint UI, multi-zone/multi-Core (permanent, per NORTH-STAR.md).
+  (playback controls: `control`/`seek`) is now **done** too, see the `transport::control` entry above.
+  Phase 4 (volume/output controls: `change_volume`/`mute`/`standby`) is now **done** too, same module —
+  still on `feature/roon-transport` (branched from `develop`), not yet merged. Phase 5 (verification &
+  merge into `develop`) is next. Non-goals for this phase: zone grouping/ungrouping (wire shape
+  documented anyway in the Phase 0 study, implementation deferred), `browse:1`/`image:1`, Slint UI,
+  multi-zone/multi-Core (permanent, per NORTH-STAR.md).
 - Slint GUI: not started (app/src/main.rs is a trivial placeholder).
 - Pairing-token persistence (so a paired extension doesn't have to re-pair on every restart) is
   deferred until a cache-store phase exists — the MOO handshake step will hold it in memory only.
