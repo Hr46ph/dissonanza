@@ -1,11 +1,10 @@
 //! MOO registry registration handshake (`com.roonlabs.registry:1/info` then
-//! `.../register`) and the `com.roonlabs.pairing:1` service this extension provides in
-//! response, per `docs/protocol/sood-moo.md`.
+//! `.../register`) and the `com.roonlabs.pairing:1`/`com.roonlabs.ping:1` services this
+//! extension provides in response, per `docs/protocol/sood-moo.md`.
 //!
 //! Operates purely over the outbound/inbound [`MooMessage`] channels `moo::transport` already
-//! exposes — independently testable without a real websocket. Responding to `ping:1` is a
-//! later step. Not wired into a connection state machine yet, so its items are unused outside
-//! their own tests.
+//! exposes — independently testable without a real websocket. Not wired into a connection state
+//! machine yet, so its items are unused outside their own tests.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
@@ -185,6 +184,31 @@ impl PairingState {
                 Ok(None)
             }
         }
+    }
+}
+
+/// Name of the `com.roonlabs.ping:1` service this extension must provide (already declared in
+/// `register`'s `provided_services`) so the Core can verify liveness at the MOO-message level,
+/// per `docs/protocol/sood-moo.md`. Distinct from the WS-level ping/pong `moo::transport` already
+/// runs — this is an application-level request the Core sends over an established connection.
+pub(crate) const PING_SERVICE: &str = "com.roonlabs.ping:1";
+
+/// Handles one inbound `REQUEST` addressed to [`PING_SERVICE`], replying `COMPLETE Success`.
+/// Stateless — unlike pairing, there's nothing to track between calls.
+pub(crate) fn handle_ping_request(
+    outbound_tx: &mpsc::UnboundedSender<MooMessage>,
+    request: &MooMessage,
+) -> Result<(), HandshakeError> {
+    match request.name.as_str() {
+        "com.roonlabs.ping:1/ping" => {
+            send_complete(outbound_tx, request.request_id, "Success", None)
+        }
+        other => send_complete(
+            outbound_tx,
+            request.request_id,
+            "InvalidRequest",
+            Some(serde_json::json!({ "error": format!("unknown request name: {other}") })),
+        ),
     }
 }
 
@@ -626,6 +650,39 @@ mod tests {
             outbound_rx.try_recv().is_err(),
             "no subscriber left to notify"
         );
+    }
+
+    #[test]
+    fn ping_request_gets_success() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+
+        handle_ping_request(
+            &outbound_tx,
+            &pairing_request("com.roonlabs.ping:1/ping", 3),
+        )
+        .expect("handled");
+
+        let reply = outbound_rx.try_recv().expect("a reply was sent");
+        assert_eq!(reply.verb, MooVerb::Complete);
+        assert_eq!(reply.name, "Success");
+        assert_eq!(reply.request_id, 3);
+        assert_eq!(reply.body, None);
+    }
+
+    #[test]
+    fn unknown_ping_request_gets_invalid_request() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+
+        handle_ping_request(
+            &outbound_tx,
+            &pairing_request("com.roonlabs.ping:1/frobnicate", 4),
+        )
+        .expect("handled");
+
+        let reply = outbound_rx.try_recv().expect("a reply was sent");
+        assert_eq!(reply.verb, MooVerb::Complete);
+        assert_eq!(reply.name, "InvalidRequest");
+        assert_eq!(reply.request_id, 4);
     }
 
     #[test]
