@@ -82,7 +82,7 @@ impl ConnectionRequests {
                 response_tx,
             })
             .map_err(|_| ConnectionRequestError::NotConnected)?;
-        Ok(MooResponseStream { rx: response_rx })
+        Ok(MooResponseStream::new(response_rx))
     }
 }
 
@@ -98,6 +98,15 @@ pub struct MooResponseStream {
 }
 
 impl MooResponseStream {
+    /// Wraps a raw receiver directly. Visible crate-wide (rather than only to
+    /// [`ConnectionRequests::send_request`]) so other `core::roon` modules — `transport`, and
+    /// future `browse`/`image` — can fabricate one in their own unit tests to drive their
+    /// message-parsing logic over plain `mpsc` channels, without needing a live Core, matching how
+    /// this crate already tests `moo::handshake` and this module's own tests below.
+    pub(crate) fn new(rx: mpsc::UnboundedReceiver<MooMessage>) -> Self {
+        Self { rx }
+    }
+
     pub async fn recv(&mut self) -> Option<MooMessage> {
         self.rx.recv().await
     }
