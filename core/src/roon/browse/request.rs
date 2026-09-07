@@ -6,6 +6,10 @@
 //! Unlike `transport:2`'s control verbs, a `Success` response here carries a body (the browse
 //! result or the loaded page) rather than being empty — `parse_response`/`await_response` are
 //! generic over the response type accordingly.
+//!
+//! Named `request.rs`, not `browse.rs` — the latter would collide with the parent module's own
+//! name and trip `clippy::module_inception`, a naming wrinkle `transport`'s `control.rs`/`zones.rs`
+//! split never had to consider.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
