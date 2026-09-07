@@ -76,10 +76,11 @@ dissonanza/
 ├── docs/
 │   ├── roon-linux-remote-client-onderzoek.md   # original research notes (Dutch); source for the files above
 │   ├── IMPL_CORE_CONNECTION.md   # completed implementation plan for core::roon::connection (Phases 0-4)
+│   ├── IMPL_TRANSPORT.md   # completed implementation plan for core::roon::transport (Phases 0-5)
 │   └── protocol/
 │       ├── sood-moo.md    # SOOD/MOO wire-protocol study — normative reference for core::roon::connection
 │       └── transport.md   # com.roonlabs.transport:2 wire-protocol study — normative reference for
-│                           #   core::roon::transport (not yet implemented)
+│                           #   core::roon::transport (implemented, see Modules below)
 └── README.md
 ```
 
@@ -252,16 +253,11 @@ dissonanza/
     off-limits). Still open: per-service (transport/browse/image/...) message body shapes aren't
     covered by this study — each needs its own; `transport:2`'s is now done, see the
     `core::roon::transport` entry below, `browse:1`/`image:1` remain open.
-- `core::roon::transport` (`com.roonlabs.transport:2` — zone list, now-playing, playback control):
-  planned in [IMPL_TRANSPORT.md](IMPL_TRANSPORT.md), chosen per user decision (2026-09-07) as the next
-  vertical slice after `connection`. Phase 0 (wire-protocol study) and Phase 1 (the `connection`-side
-  request/response multiplexing seam) are done, see the `core::roon::connection` entry above. Phase 2
-  (zone subscription & state model) is done too, see the `core::roon::transport` entry above. Phase 3
-  (playback controls: `control`/`seek`) is now **done** too, see the `transport::control` entry above.
-  Phase 4 (volume/output controls: `change_volume`/`mute`/`standby`) is now **done** too, same module.
-  Phase 5 (verification & merge) is now **done** too — all four `cargo` gates green (81 unit tests,
-  `clippy -- -D warnings`, `fmt --check` all clean) — `IMPL_TRANSPORT.md`'s plan is complete as of the
-  `feature/roon-transport` → `develop` merge recorded below. Non-goals for this phase: zone
+- `core::roon::transport` (`com.roonlabs.transport:2` — zone list, now-playing, playback control): all
+  five phases of [docs/IMPL_TRANSPORT.md](docs/IMPL_TRANSPORT.md) are complete as of the
+  `feature/roon-transport` → `develop` merge recorded below — see the `core::roon::transport` and
+  `core::roon::connection` entries above for what each phase built. All four `cargo` gates green (81
+  unit tests, `clippy -- -D warnings`, `fmt --check` all clean). Non-goals for this phase: zone
   grouping/ungrouping (wire shape documented anyway in the Phase 0 study, implementation deferred),
   `browse:1`/`image:1`, Slint UI, multi-zone/multi-Core (permanent, per NORTH-STAR.md).
 - Slint GUI: not started (app/src/main.rs is a trivial placeholder).
@@ -275,6 +271,11 @@ dissonanza/
 
 ## Recently changed
 
+- Archived the completed transport implementation plan (2026-09-07): moved `IMPL_TRANSPORT.md` to
+  [docs/IMPL_TRANSPORT.md](docs/IMPL_TRANSPORT.md) now that all five phases are done (see Open work
+  above) — kept for reference, not deleted, same precedent as `IMPL_CORE_CONNECTION.md`'s archival.
+  Never a tracked file (`/IMPL_*.md` and `/docs/*` are both gitignored, `/docs/protocol/` excepted),
+  so this was a plain filesystem move, not a `git mv`.
 - Added `core::roon::transport::control` for playback controls (2026-09-07): IMPL_TRANSPORT.md Phase
   3, on `feature/roon-transport`. Wrote Phase 3's design decisions and numbered steps into
   IMPL_TRANSPORT.md first (Phase 0/1 were both already done, so — per the plan's own study-first
