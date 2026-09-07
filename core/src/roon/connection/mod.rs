@@ -12,6 +12,7 @@ mod state;
 pub use config::ConnectionConfig;
 pub use error::ConnectionError;
 pub use moo::handshake::HandshakeError;
+pub use moo::message::{MooBody, MooMessage, MooVerb};
 pub use moo::transport::TransportError;
 pub use sood::discovery::DiscoveryError;
 pub use state::{ConnectionEvent, ConnectionState};
@@ -23,7 +24,6 @@ use tokio::task::JoinHandle;
 
 use keepalive::Keepalive;
 use moo::handshake::{self, PairingEvent, PairingState};
-use moo::message::{MooMessage, MooVerb};
 use moo::transport;
 use sood::discovery::{self, DiscoveredCore};
 
