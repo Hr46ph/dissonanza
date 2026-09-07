@@ -18,9 +18,9 @@ pub enum ConnectionState {
     /// provides.
     Paired { core_id: String },
     /// The connection ended: the transport closed, the app-level keepalive went stale with no
-    /// activity, a step failed, or shutdown was requested. This step never retries on its own —
-    /// reconnecting by returning to `Discovering` is a later step's responsibility, per
-    /// CLAUDE.md's mandatory technical choices (never redial a stale address).
+    /// activity, a step failed, or shutdown was requested. Unless shutdown was requested,
+    /// `Connection` loops back to a fresh `Discovering` pass — SOOD discovery starts over rather
+    /// than redialing the last known address, per CLAUDE.md's mandatory technical choices.
     Disconnected,
 }
 

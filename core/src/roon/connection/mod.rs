@@ -90,9 +90,11 @@ pub struct Connection;
 impl Connection {
     /// Spawns the connection pipeline in the background: SOOD discovery for a Roon Core, the MOO
     /// registry handshake, then handling inbound `com.roonlabs.pairing:1`/`com.roonlabs.ping:1`
-    /// requests with an app-level keepalive until the connection ends. Returns a handle to stop
-    /// it, and a channel of [`ConnectionEvent`]s reporting its progress. This step never retries
-    /// on disconnect — reconnecting is a later step's responsibility.
+    /// requests with an app-level keepalive, until shutdown is requested. Returns a handle to
+    /// stop it, and a channel of [`ConnectionEvent`]s reporting its progress. Any other
+    /// disconnect (transport closed, keepalive went stale, a step failed) loops back to a fresh
+    /// `Discovering` pass instead of stopping — SOOD discovery starts over from scratch each
+    /// time, so a Core's address is never redialed, per CLAUDE.md's mandatory technical choices.
     pub fn spawn(
         config: ConnectionConfig,
     ) -> (ConnectionHandle, mpsc::UnboundedReceiver<ConnectionEvent>) {
@@ -112,19 +114,30 @@ async fn run(
     event_tx: mpsc::UnboundedSender<ConnectionEvent>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    send_state(&event_tx, ConnectionState::Discovering);
+    loop {
+        send_state(&event_tx, ConnectionState::Discovering);
 
-    if let Err(err) = run_until_disconnected(&config, &event_tx, &mut shutdown_rx).await {
-        let _ = event_tx.send(ConnectionEvent::Error(err));
+        if let Err(err) = run_until_disconnected(&config, &event_tx, &mut shutdown_rx).await {
+            let _ = event_tx.send(ConnectionEvent::Error(err));
+        }
+
+        send_state(&event_tx, ConnectionState::Disconnected);
+
+        // `shutdown_rx`'s current value distinguishes a shutdown-requested end (stop) from every
+        // other one (loop back to a fresh `Discovering` pass) — `run_until_disconnected` returns
+        // `Ok(())` for both, since every exit path already routes through `shutdown_rx` one way
+        // or another, so the flag itself is the single source of truth here.
+        if *shutdown_rx.borrow() {
+            return;
+        }
     }
-
-    send_state(&event_tx, ConnectionState::Disconnected);
 }
 
 /// Runs discovery → connect → register, then the pairing/ping request-response loop, until the
 /// connection ends. `Ok(())` covers every clean end (shutdown requested, keepalive went stale,
 /// the transport closed on its own with no error); `Err` means a step failed and should be
-/// surfaced before `run` reports `Disconnected`.
+/// surfaced before `run` reports `Disconnected`. Either way, `run` (the caller) decides whether
+/// to loop back to `Discovering` or stop, based on `shutdown_rx`'s value once this returns.
 async fn run_until_disconnected(
     config: &ConnectionConfig,
     event_tx: &mpsc::UnboundedSender<ConnectionEvent>,
