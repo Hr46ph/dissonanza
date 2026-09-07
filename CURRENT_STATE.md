@@ -67,12 +67,15 @@ dissonanza/
 ## Modules
 
 - **`core::roon::connection`** (`core/src/roon/connection/`) — per CLAUDE.md §1, the sole owner of
-  Core discovery, `core_paired`/`core_unpaired` handling, keepalive, and reconnect. Now has a
+  Core discovery, `core_paired`/`core_unpaired` handling, keepalive, and reconnect. Has a
   public API: `Connection::spawn(ConnectionConfig) -> (ConnectionHandle,
   mpsc::UnboundedReceiver<ConnectionEvent>)` wires discovery → MOO connect → registry handshake →
-  the pairing:1/ping:1 request loop → keepalive into one task. `sood`/`moo` stay private modules
-  (only reachable from `connection` itself, via `pub(super)`) — nothing outside this module calls
-  them directly.
+  the pairing:1/ping:1 request loop → keepalive into one task, looping back to a fresh
+  `Discovering` pass on any disconnect (transport closed, keepalive stale, a step failed) until
+  `ConnectionHandle::shutdown` is called — SOOD discovery starts over from scratch every time, so
+  a Core's address is never redialed, per CLAUDE.md's mandatory technical choices. `sood`/`moo`
+  stay private modules (only reachable from `connection` itself, via `pub(super)`) — nothing
+  outside this module calls them directly.
   - `connection::state` — `ConnectionState` (`Discovering`, `Connecting`, `Registering`,
     `Paired { core_id }`, `Disconnected`) and `ConnectionEvent` (`StateChanged`, `Error`), emitted
     on `Connection::spawn`'s event channel.
@@ -126,14 +129,17 @@ dissonanza/
   a new `develop`, per CLAUDE.md's git workflow): SOOD TLV parsing, the SOOD multicast discovery
   loop, MOO message framing, the MOO websocket transport, the MOO registry registration
   handshake, the inbound `com.roonlabs.pairing:1`/`com.roonlabs.ping:1` services, the app-level
-  keepalive staleness check, and now the connection state machine and public `Connection` API
-  wiring all of it together are done (see Modules above) — Phase 3's first two steps (3.1, 3.2)
-  are complete. Still to build (3.3): reconnect-on-disconnect — right now, when the transport
-  closes, the keepalive goes stale, or a step fails, `Connection` just reports `Disconnected` and
-  stops; it doesn't loop back to a fresh `Discovering` pass the way CLAUDE.md's mandatory
-  technical choices require (never redial a stale address, always wait for a new SOOD discovery
-  event). Also open: pairing-token persistence, and the discovery-keeps-running-as-a-fallback
-  question noted under `sood::discovery` above, which is really the same reconnect work.
+  keepalive staleness check, the connection state machine and public `Connection` API wiring all
+  of it together, and now reconnect-on-disconnect are done (see Modules above) — Phase 3 is
+  complete. Still to build: the Phase 4 end-to-end integration test (fake SOOD responder + mock
+  MOO/WS server driving a real `Connection` through `Discovering → Connecting → Registering →
+  Paired`, and now also through a reconnect cycle) and the `feature/roon-connection-core` →
+  `develop` merge. Also open: pairing-token persistence, reconnect has no backoff yet (a
+  disconnect that fails immediately and repeatedly — e.g. interface enumeration erroring on every
+  attempt — loops back to `Discovering` with no delay; not part of 3.3's scoped behavior, flagged
+  here rather than silently added), and the discovery-keeps-running-as-a-fallback-while-paired
+  question noted under `sood::discovery` above (distinct from reconnect-after-disconnect, which is
+  now done).
   - ~~Custom Rust SOOD/MOO protocol implementation needs its own wire-protocol study~~ — **done**, see
     [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md): packet/message formats, the
     connection/registration/pairing handshake, and the keepalive rationale behind CLAUDE.md §1,
@@ -153,6 +159,25 @@ dissonanza/
 
 ## Recently changed
 
+- Added reconnect-on-disconnect (2026-09-07): `core::roon::connection::run` (the task body behind
+  `Connection::spawn`) now loops — on any disconnect other than `ConnectionHandle::shutdown`
+  (transport closed, keepalive went stale, a step failed), it reports `Disconnected` and then
+  loops back to a fresh `ConnectionState::Discovering` pass instead of returning, per CLAUDE.md's
+  mandatory technical choice to never redial a stale address: `discover_first_core` spawns a brand
+  new `sood::discovery::run` task each time round the loop, so there's no cached address to redial
+  even accidentally. Whether to loop or stop is decided by reading `shutdown_rx`'s current value
+  (a `watch::Receiver<bool>`) once `run_until_disconnected` returns, rather than by giving that
+  function its own "should I retry" return variant — every one of its exit paths already routes
+  through `shutdown_rx` one way or another, so the flag alone is sufficient and simpler than
+  threading a second signal through it. This is Phase 3's last step (3.3); Phase 3 (state,
+  keepalive, reconnect) is now complete. No new unit tests: the change is a control-flow loop over
+  existing, already-tested pipeline steps (discovery/transport/handshake), with no new pure logic
+  to isolate — exercising the loop itself needs the fake-SOOD/mock-MOO harness Phase 4.1's
+  end-to-end integration test is building next, so real coverage of "does it actually rediscover
+  and re-pair" lands there. Reconnect has no backoff yet (flagged as an open gap above, not part of
+  this step's scope). Doc comments on `Connection::spawn`, `run_until_disconnected`, and
+  `ConnectionState::Disconnected` updated to match — they previously said this step "never retries
+  on disconnect."
 - Added the connection state machine and public `Connection` API (2026-09-07):
   `core::roon::connection::{state, error, mod}` — `Connection::spawn(ConnectionConfig) ->
   (ConnectionHandle, mpsc::UnboundedReceiver<ConnectionEvent>)` is now the single public entry
