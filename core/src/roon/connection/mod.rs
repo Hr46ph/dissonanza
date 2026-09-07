@@ -31,6 +31,14 @@ use sood::discovery::{self, DiscoveredCore};
 /// `moo::handshake::register` and dispatched on by [`provided_service_for`] below.
 const PROVIDED_SERVICES: &[&str] = &[handshake::PAIRING_SERVICE, handshake::PING_SERVICE];
 
+/// Core-provided services this extension needs (`required_services`) or optionally uses
+/// (`optional_services`), declared during `moo::handshake::register` per
+/// `docs/protocol/sood-moo.md`. Both empty: no per-service Core API module (`transport:2`,
+/// `browse:1`, ...) is implemented yet — see CURRENT_STATE.md's open work. A future phase adding
+/// one fills in the relevant list here.
+const REQUIRED_SERVICES: &[&str] = &[];
+const OPTIONAL_SERVICES: &[&str] = &[];
+
 /// How long the app-level keepalive tolerates no inbound MOO activity (a `pair` request, a
 /// `ping:1/ping` request, anything at all) before treating the connection as stale and ending
 /// it, per CLAUDE.md §1. `docs/protocol/sood-moo.md` doesn't document a Core-side ping cadence
@@ -170,7 +178,15 @@ async fn run_until_disconnected(
         _ = shutdown_rx.changed() => {
             return stop_transport_and_finish(transport_stop_tx, transport_task).await;
         }
-        result = handshake::register(&outbound_tx, &mut inbound_rx, config, PROVIDED_SERVICES, None) => {
+        result = handshake::register(
+            &outbound_tx,
+            &mut inbound_rx,
+            config,
+            REQUIRED_SERVICES,
+            OPTIONAL_SERVICES,
+            PROVIDED_SERVICES,
+            None,
+        ) => {
             result?
         }
     };

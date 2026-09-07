@@ -41,12 +41,14 @@ pub(crate) struct Registered {
 /// Runs the registration handshake to completion: `registry:1/info` (its response body carries
 /// a `core_id` used to look up a saved pairing token — no cache/persistence exists yet this
 /// phase, so `saved_token` is passed in directly by the caller instead) then
-/// `registry:1/register` declaring `provided_services`, returning the parsed `Registered` body
-/// on success.
+/// `registry:1/register` declaring `required_services`/`optional_services`/`provided_services`,
+/// returning the parsed `Registered` body on success.
 pub(crate) async fn register(
     outbound_tx: &mpsc::UnboundedSender<MooMessage>,
     inbound_rx: &mut mpsc::UnboundedReceiver<MooMessage>,
     config: &ConnectionConfig,
+    required_services: &[&str],
+    optional_services: &[&str],
     provided_services: &[&str],
     saved_token: Option<&str>,
 ) -> Result<Registered, HandshakeError> {
@@ -59,6 +61,8 @@ pub(crate) async fn register(
         "display_version": config.display_version,
         "publisher": config.publisher,
         "email": config.email,
+        "required_services": required_services,
+        "optional_services": optional_services,
         "provided_services": provided_services,
     });
     if let Some(website) = &config.website {
@@ -325,6 +329,14 @@ mod tests {
                 other => panic!("expected a JSON body, got {other:?}"),
             };
             assert_eq!(
+                body["required_services"],
+                serde_json::json!(["com.roonlabs.transport:2"])
+            );
+            assert_eq!(
+                body["optional_services"],
+                serde_json::json!(["com.roonlabs.browse:1"])
+            );
+            assert_eq!(
                 body["provided_services"],
                 serde_json::json!(["com.roonlabs.pairing:1", "com.roonlabs.ping:1"])
             );
@@ -348,6 +360,8 @@ mod tests {
             &outbound_tx,
             &mut inbound_rx,
             &config(),
+            &["com.roonlabs.transport:2"],
+            &["com.roonlabs.browse:1"],
             &["com.roonlabs.pairing:1", "com.roonlabs.ping:1"],
             None,
         )
@@ -385,7 +399,16 @@ mod tests {
                 .expect("reply to register");
         });
 
-        let result = register(&outbound_tx, &mut inbound_rx, &config(), &[], None).await;
+        let result = register(
+            &outbound_tx,
+            &mut inbound_rx,
+            &config(),
+            &[],
+            &[],
+            &[],
+            None,
+        )
+        .await;
 
         assert!(matches!(
             result,
@@ -461,6 +484,8 @@ mod tests {
             &outbound_tx,
             &mut inbound_rx,
             &cfg,
+            &[],
+            &[],
             &[],
             Some("saved-token"),
         )
