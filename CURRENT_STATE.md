@@ -27,7 +27,8 @@ dissonanza/
 │       └── roon/
 │           ├── mod.rs           # pub mod connection;
 │           └── connection/      # sole owner of Core discovery/pairing/keepalive (CLAUDE.md §1)
-│               ├── mod.rs           # mod sood; mod moo; (private — not a public surface yet)
+│               ├── mod.rs           # mod config; mod sood; mod moo; (private — not a public surface yet)
+│               ├── config.rs        # ConnectionConfig — extension identity for MOO registration
 │               ├── sood/            # private: SOOD discovery, never `pub`
 │               │   ├── mod.rs
 │               │   ├── message.rs   # SoodMessage/SoodMessageType/SoodError — TLV codec, pure parsing
@@ -35,7 +36,8 @@ dissonanza/
 │               └── moo/             # private: MOO websocket protocol, never `pub`
 │                   ├── mod.rs
 │                   ├── message.rs   # MooMessage/MooVerb/MooBody/MooError — message framing, pure parsing
-│                   └── transport.rs # websocket connect, MOO frame send/receive, WS ping/pong keepalive
+│                   ├── transport.rs # websocket connect, MOO frame send/receive, WS ping/pong keepalive
+│                   └── handshake.rs # registry:1/info + /register handshake, parses Registered body
 ├── app/                  # `dissonanza` crate (binary) — Slint UI shell, depends on core's public API
 │   └── src/
 │       └── main.rs           # trivial placeholder, no Slint wired up yet
@@ -77,17 +79,27 @@ dissonanza/
     binary WS frames over `mpsc` channels, and runs an application-level WS ping every
     (caller-supplied) interval, closing the connection if a pong is missed. A framing violation
     (malformed MOO bytes, or a text frame) ends the loop immediately rather than resyncing.
-    Exposes `run(...)`, not yet called by anything. `moo::handshake` (registry/pairing/ping) not
-    started.
+    Exposes `run(...)`, not yet called by anything.
+  - `moo::handshake` — the registry registration handshake: sends `registry:1/info` then
+    `registry:1/register` (declaring caller-supplied `provided_services`, plus a saved token if
+    the caller has one), and parses the `COMPLETE Registered` body (`core_id`, `token`,
+    `display_name`, `display_version`, `provided_services`) into a typed `Registered`. Operates
+    purely over `mpsc` channels shaped like `moo::transport`'s, so it's tested without a real
+    websocket. Exposes `register(...)`, not yet called by anything. Pairing (`pair`/`unpair`) and
+    the `ping:1` responder are still separate, not-yet-started steps.
+  - `connection::config` — `ConnectionConfig` (`extension_id`, `display_name`, `display_version`,
+    `publisher`, `email`, optional `website`): the extension identity `moo::handshake::register`
+    sends during registration.
 
 ## Open work
 
 - `core::roon::connection` implementation in progress on `feature/roon-connection-core` (branched from
   a new `develop`, per CLAUDE.md's git workflow): SOOD TLV parsing, the SOOD multicast discovery
-  loop, MOO message framing, and the MOO websocket transport are done (see Modules above). Still to
-  build: the registry/pairing/ping handshake, the app-level keepalive on top of
-  `core_paired`/`core_unpaired`, reconnect-on-disconnect, and the public `Connection` API tying it all
-  together — none of these are wired up yet, and `sood::discovery::run`/`moo::transport::run` aren't
+  loop, MOO message framing, the MOO websocket transport, and the MOO registry registration
+  handshake are done (see Modules above). Still to build: handling inbound `pair`/`unpair` events,
+  the `ping:1` responder, the app-level keepalive on top of `core_paired`/`core_unpaired`,
+  reconnect-on-disconnect, and the public `Connection` API tying it all together — none of these are
+  wired up yet, and `sood::discovery::run`/`moo::transport::run`/`moo::handshake::register` aren't
   called by anything yet.
   - ~~Custom Rust SOOD/MOO protocol implementation needs its own wire-protocol study~~ — **done**, see
     [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md): packet/message formats, the
@@ -108,6 +120,16 @@ dissonanza/
 
 ## Recently changed
 
+- Added the MOO registry registration handshake (2026-09-07): `core::roon::connection::moo::handshake`
+  (`register(...)`) sends `registry:1/info` then `registry:1/register` (declaring caller-supplied
+  `provided_services` and an optional saved token), and parses the `COMPLETE Registered` body into
+  a typed `Registered { core_id, token, display_name, display_version, provided_services }`.
+  Also added `connection::config::ConnectionConfig` (extension identity: `extension_id`,
+  `display_name`, `display_version`, `publisher`, `email`, optional `website`). Operates purely
+  over `mpsc` channels shaped like `moo::transport`'s outbound/inbound pair, so it's tested without
+  a real websocket. Added `serde` (`derive` feature) to `core`'s dependencies to deserialize the
+  `Registered` body. Token is in-memory only this phase — persistence is deferred, per the
+  implementation plan's non-goals. Not wired into a connection state machine yet.
 - Fixed `release.yml` (renamed to `publish.yml`) firing on every push (2026-09-07): root cause was an invalid `if: ${{ secrets.AUR_SSH_PRIVATE_KEY != '' }}` on `publish-aur` — the `secrets` context can't be read in *any* `if:` conditional (job- or step-level), present since the file's first commit. Because the file failed to parse, GitHub couldn't read its tag-only `on:` block and attached a failing "Invalid workflow file" check to every push instead. Fixed per GitHub's documented pattern: surface the secret as a job-level `env:` var, then gate the AUR-publish step's `if:` on `env.AUR_SSH_PRIVATE_KEY` instead. Also renamed `release.yml` → `publish.yml` because the broken file's stale workflow registration (wrong display name, wrong job content shown) survived a same-name delete-and-recreate and needed a fresh filename to clear. Trigger is unchanged: still tag-only (`v*.*.*`), never runs on a plain push.
 - Added the MOO websocket transport (2026-09-06): `core::roon::connection::moo::transport`
   (`tokio-tungstenite` + `futures-util` for the split sink/stream) — connects to
