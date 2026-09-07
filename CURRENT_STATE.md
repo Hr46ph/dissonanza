@@ -59,8 +59,11 @@ dissonanza/
 │       └── PKGBUILD    # AUR package recipe (draft, checksums pending a real tag)
 ├── docs/
 │   ├── roon-linux-remote-client-onderzoek.md   # original research notes (Dutch); source for the files above
+│   ├── IMPL_CORE_CONNECTION.md   # completed implementation plan for core::roon::connection (Phases 0-4)
 │   └── protocol/
-│       └── sood-moo.md   # SOOD/MOO wire-protocol study — normative reference for core::roon::connection
+│       ├── sood-moo.md    # SOOD/MOO wire-protocol study — normative reference for core::roon::connection
+│       └── transport.md   # com.roonlabs.transport:2 wire-protocol study — normative reference for
+│                           #   core::roon::transport (not yet implemented)
 └── README.md
 ```
 
@@ -152,7 +155,25 @@ dissonanza/
     Rust ports (`shin1ohno/roon-rs`, `TheAppgineer/rust-roon-api` — legally-clear reference/reuse
     material; "not relying on it" was about not taking a dependency, not about the code being
     off-limits). Still open: per-service (transport/browse/image/...) message body shapes aren't
-    covered — each needs its own study when that phase starts.
+    covered by this study — each needs its own; `transport:2`'s is now done, see the
+    `core::roon::transport` entry below, `browse:1`/`image:1` remain open.
+- `core::roon::transport` (`com.roonlabs.transport:2` — zone list, now-playing, playback control):
+  planned in [IMPL_TRANSPORT.md](IMPL_TRANSPORT.md), chosen per user decision (2026-09-07) as the next
+  vertical slice after `connection`. Phase 0 (wire-protocol study) is done, see
+  [docs/protocol/transport.md](docs/protocol/transport.md). No code exists yet. Phase 1's design (how
+  `transport` sends/receives its own MOO traffic over the already-paired connection, and re-subscribes
+  after a reconnect, without `connection` needing to know about `transport:2` specifically — connection
+  state itself stays `connection`'s alone, per CLAUDE.md §1) is now resolved and **Gate-1 accepted** with
+  two numbered steps, see IMPL_TRANSPORT.md's Phase 1: a command channel into `run_until_disconnected`'s
+  existing loop plus a new `Clone`-able `ConnectionRequests` handle (kept separate from
+  `ConnectionHandle`, whose `shutdown` stays single-owner, so any number of future service modules can
+  each hold their own clone). Reconnect handling for an active subscription falls out of the mechanism's
+  own lifetimes (a fresh dispatch table/command channel per connection attempt, dropped on disconnect)
+  rather than needing an explicit signal. No code written yet. Phases 2-4's fine steps are still
+  intentionally not written, per the same study-first precedent `docs/IMPL_CORE_CONNECTION.md` set — they
+  depend on Phase 1 actually landing first. Non-goals for this phase: zone grouping/ungrouping (wire shape
+  documented anyway in the Phase 0 study, implementation deferred), `browse:1`/`image:1`, Slint UI,
+  multi-zone/multi-Core (permanent, per NORTH-STAR.md).
 - Slint GUI: not started (app/src/main.rs is a trivial placeholder).
 - Pairing-token persistence (so a paired extension doesn't have to re-pair on every restart) is
   deferred until a cache-store phase exists — the MOO handshake step will hold it in memory only.
@@ -164,6 +185,31 @@ dissonanza/
 
 ## Recently changed
 
+- Completed the `com.roonlabs.transport:2` wire-protocol study (2026-09-07):
+  [docs/protocol/transport.md](docs/protocol/transport.md) — IMPL_TRANSPORT.md's Phase 0. Covers the
+  `Zone`/`Output`/`Volume`/`NowPlaying`/`QueueItem` data model, `subscribe_zones`/`subscribe_outputs`/
+  `subscribe_queue` subscription envelope, all control verbs (`control`, `seek`, `change_volume`,
+  `mute`/`mute_all`, `standby`/`toggle_standby`/`convenience_switch`, `change_settings`,
+  `transfer_zone`, `play_from_here`, `get_zones`/`get_outputs`), and the `group_outputs`/
+  `ungroup_outputs` wire shape (grouping itself stays deferred). Cross-checked against
+  `RoonLabs/node-roon-api-transport` (primary/normative, Apache-2.0), `RoonLabs/node-roon-api`'s
+  `moo.js` (for subscription-key/reconnect semantics), and the same two community Rust ports
+  sood-moo.md used. Key finding for IMPL_TRANSPORT.md's Phase 1 open architectural question: the
+  reference implementation's subscription state (`Moo`'s `requests`/`subkey` counters) lives entirely
+  in the websocket-connection object and is discarded on disconnect with no Core-side memory either —
+  confirms that re-subscribing after a `connection` reconnect is `transport`'s own responsibility, not
+  something `connection` needs to (or should) handle on its behalf. Also flags two small
+  cross-source divergences worth carrying into implementation: `Output.source_controls` is really an
+  array despite the JSDoc's singular formatting (the `control_key` selector on `standby`/
+  `toggle_standby`/`convenience_switch` only makes sense if there can be more than one), and
+  `change_volume`'s `value` must be a float per the primary source, not the `i32` one Rust port uses.
+  No code changes; Phase 1 remains deferred pending a design-confirmation step with the user, per the
+  plan.
+- Archived the completed core-connection implementation plan (2026-09-07): moved
+  `IMPL_CORE_CONNECTION.md` to [docs/IMPL_CORE_CONNECTION.md](docs/IMPL_CORE_CONNECTION.md) now
+  that all its phases are done (see Open work above) — kept for reference, not deleted, since it
+  records per-step Gate 1 rationale future phases may want to mirror. Never a tracked file, so
+  this was a plain filesystem move, not a `git mv`.
 - Fixed `moo::handshake::register` to send `required_services`/`optional_services` (2026-09-07):
   the registration body previously only declared `provided_services`, though
   `docs/protocol/sood-moo.md` documents all three as expected — the likely reason a real Core
