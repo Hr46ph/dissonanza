@@ -6,16 +6,20 @@ mod config;
 mod error;
 mod keepalive;
 mod moo;
+mod requests;
 mod sood;
 mod state;
 
 pub use config::ConnectionConfig;
 pub use error::ConnectionError;
 pub use moo::handshake::HandshakeError;
+pub use moo::message::{MooBody, MooMessage, MooVerb};
 pub use moo::transport::TransportError;
+pub use requests::{ConnectionRequestError, ConnectionRequests, MooResponseStream};
 pub use sood::discovery::DiscoveryError;
 pub use state::{ConnectionEvent, ConnectionState};
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, watch};
@@ -23,8 +27,8 @@ use tokio::task::JoinHandle;
 
 use keepalive::Keepalive;
 use moo::handshake::{self, PairingEvent, PairingState};
-use moo::message::{MooMessage, MooVerb};
 use moo::transport;
+use requests::{CommandTx, ConnectionCommand};
 use sood::discovery::{self, DiscoveredCore};
 
 /// Services this extension provides and must handle inbound requests for, declared during
@@ -33,10 +37,12 @@ const PROVIDED_SERVICES: &[&str] = &[handshake::PAIRING_SERVICE, handshake::PING
 
 /// Core-provided services this extension needs (`required_services`) or optionally uses
 /// (`optional_services`), declared during `moo::handshake::register` per
-/// `docs/protocol/sood-moo.md`. Both empty: no per-service Core API module (`transport:2`,
-/// `browse:1`, ...) is implemented yet — see CURRENT_STATE.md's open work. A future phase adding
-/// one fills in the relevant list here.
-const REQUIRED_SERVICES: &[&str] = &[];
+/// `docs/protocol/sood-moo.md`. `com.roonlabs.transport:2` is required now that
+/// `core::roon::transport` exists (IMPL_TRANSPORT.md Phase 2) — kept as a literal here rather than
+/// a constant imported from `transport`, so `connection` stays ignorant of `transport:2`
+/// specifically beyond needing its name to register, per CLAUDE.md §1. `browse:1`/`image:1` will
+/// each add their own entry when implemented.
+const REQUIRED_SERVICES: &[&str] = &["com.roonlabs.transport:2"];
 const OPTIONAL_SERVICES: &[&str] = &[];
 
 /// How long the app-level keepalive tolerates no inbound MOO activity (a `pair` request, a
@@ -99,17 +105,28 @@ impl Connection {
     /// Spawns the connection pipeline in the background: SOOD discovery for a Roon Core, the MOO
     /// registry handshake, then handling inbound `com.roonlabs.pairing:1`/`com.roonlabs.ping:1`
     /// requests with an app-level keepalive, until shutdown is requested. Returns a handle to
-    /// stop it, and a channel of [`ConnectionEvent`]s reporting its progress. Any other
-    /// disconnect (transport closed, keepalive went stale, a step failed) loops back to a fresh
+    /// stop it, a [`ConnectionRequests`] other `core::roon` modules can clone and use to send
+    /// their own MOO requests over whichever connection is currently up (IMPL_TRANSPORT.md Phase
+    /// 1), and a channel of [`ConnectionEvent`]s reporting its progress. Any other disconnect
+    /// (transport closed, keepalive went stale, a step failed) loops back to a fresh
     /// `Discovering` pass instead of stopping — SOOD discovery starts over from scratch each
     /// time, so a Core's address is never redialed, per CLAUDE.md's mandatory technical choices.
     pub fn spawn(
         config: ConnectionConfig,
-    ) -> (ConnectionHandle, mpsc::UnboundedReceiver<ConnectionEvent>) {
+    ) -> (
+        ConnectionHandle,
+        ConnectionRequests,
+        mpsc::UnboundedReceiver<ConnectionEvent>,
+    ) {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let task = tokio::spawn(run(config, event_tx, shutdown_rx));
-        (ConnectionHandle { shutdown_tx, task }, event_rx)
+        let (requests_tx, requests_rx) = watch::channel::<Option<CommandTx>>(None);
+        let task = tokio::spawn(run(config, event_tx, shutdown_rx, requests_tx));
+        (
+            ConnectionHandle { shutdown_tx, task },
+            ConnectionRequests::new(requests_rx),
+            event_rx,
+        )
     }
 }
 
@@ -121,14 +138,21 @@ async fn run(
     config: ConnectionConfig,
     event_tx: mpsc::UnboundedSender<ConnectionEvent>,
     mut shutdown_rx: watch::Receiver<bool>,
+    requests_tx: watch::Sender<Option<CommandTx>>,
 ) {
     loop {
         send_state(&event_tx, ConnectionState::Discovering);
 
-        if let Err(err) = run_until_disconnected(&config, &event_tx, &mut shutdown_rx).await {
+        if let Err(err) =
+            run_until_disconnected(&config, &event_tx, &mut shutdown_rx, &requests_tx).await
+        {
             let _ = event_tx.send(ConnectionEvent::Error(err));
         }
 
+        // Whatever `run_until_disconnected` published while it ran is now stale — nothing should
+        // be able to send a request against a connection that just ended, whether this loop is
+        // about to retry `Discovering` or stop for good.
+        requests_tx.send_replace(None);
         send_state(&event_tx, ConnectionState::Disconnected);
 
         // `shutdown_rx`'s current value distinguishes a shutdown-requested end (stop) from every
@@ -150,6 +174,7 @@ async fn run_until_disconnected(
     config: &ConnectionConfig,
     event_tx: &mpsc::UnboundedSender<ConnectionEvent>,
     shutdown_rx: &mut watch::Receiver<bool>,
+    requests_tx: &watch::Sender<Option<CommandTx>>,
 ) -> Result<(), ConnectionError> {
     let Some(core) = discover_first_core(shutdown_rx).await? else {
         return Ok(()); // shutdown requested before any Core was found
@@ -195,6 +220,18 @@ async fn run_until_disconnected(
     let mut keepalive = Keepalive::new(KEEPALIVE_TIMEOUT, Instant::now());
     let mut keepalive_check = tokio::time::interval(KEEPALIVE_CHECK_INTERVAL);
 
+    // Request-ids 1 and 2 are `handshake::register`'s own (already spent, above) — this loop's
+    // allocator starts right after them. Scoped to this connection attempt only, like everything
+    // else below, matching sood-moo.md: the requester picks a monotonically increasing
+    // Request-Id per connection, not across reconnects.
+    let mut next_request_id: u32 = 3;
+    let mut pending: HashMap<u32, mpsc::UnboundedSender<MooMessage>> = HashMap::new();
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel::<ConnectionCommand>();
+    // Other `core::roon` modules can now send requests over this connection via
+    // `ConnectionRequests` (IMPL_TRANSPORT.md Phase 1) — available as soon as the handshake is
+    // done, not gated on `Paired`; see `requests.rs`'s doc comment for why.
+    requests_tx.send_replace(Some(command_tx));
+
     loop {
         tokio::select! {
             changed = shutdown_rx.changed() => {
@@ -205,6 +242,17 @@ async fn run_until_disconnected(
             _ = keepalive_check.tick() => {
                 if keepalive.is_stale(Instant::now()) {
                     return stop_transport_and_finish(transport_stop_tx, transport_task).await;
+                }
+            }
+            // `command_rx` can only observe `None` (all senders dropped) after this function has
+            // already returned and dropped its own `command_tx` clone — the clone published into
+            // `requests_tx` above keeps at least one sender alive for this whole loop, so the
+            // `None` arm here is unreachable in practice; handled as a no-op rather than ending
+            // the connection, since losing every `ConnectionRequests` clone says nothing about
+            // whether the MOO connection itself is still fine.
+            maybe_cmd = command_rx.recv() => {
+                if let Some(cmd) = maybe_cmd {
+                    handle_command(cmd, &outbound_tx, &mut pending, &mut next_request_id);
                 }
             }
             maybe_msg = inbound_rx.recv() => {
@@ -219,24 +267,79 @@ async fn run_until_disconnected(
                 };
 
                 keepalive.record_activity(Instant::now());
-                if msg.verb != MooVerb::Request {
-                    continue;
-                }
-                match provided_service_for(&msg.name) {
-                    Some(ProvidedService::Pairing) => {
-                        let event = pairing.handle_request(&outbound_tx, &registered.core_id, &msg)?;
-                        if let Some(PairingEvent::Paired { core_id }) = event {
-                            send_state(event_tx, ConnectionState::Paired { core_id });
+                if msg.verb == MooVerb::Request {
+                    match provided_service_for(&msg.name) {
+                        Some(ProvidedService::Pairing) => {
+                            let event = pairing.handle_request(&outbound_tx, &registered.core_id, &msg)?;
+                            if let Some(PairingEvent::Paired { core_id }) = event {
+                                send_state(event_tx, ConnectionState::Paired { core_id });
+                            }
                         }
+                        Some(ProvidedService::Ping) => {
+                            handshake::handle_ping_request(&outbound_tx, &msg)?;
+                        }
+                        None => {}
                     }
-                    Some(ProvidedService::Ping) => {
-                        handshake::handle_ping_request(&outbound_tx, &msg)?;
-                    }
-                    None => {}
+                } else {
+                    // A CONTINUE/COMPLETE responding to a request some `ConnectionRequests`
+                    // caller sent — forward it if still awaited. An unmatched request-id here
+                    // means the caller already stopped listening or this is stray traffic —
+                    // harmless either way, dropped silently like today.
+                    dispatch_response(msg, &mut pending);
                 }
             }
         }
     }
+}
+
+/// Handles one command from a `ConnectionRequests` caller: allocates the next request-id, sends
+/// the outbound `REQUEST`, and registers `response_tx` to receive its `CONTINUE`/`COMPLETE`s —
+/// but only if the send succeeded, so a dead transport doesn't accumulate registrations nothing
+/// will ever remove.
+fn handle_command(
+    cmd: ConnectionCommand,
+    outbound_tx: &mpsc::UnboundedSender<MooMessage>,
+    pending: &mut HashMap<u32, mpsc::UnboundedSender<MooMessage>>,
+    next_request_id: &mut u32,
+) {
+    let ConnectionCommand::SendRequest {
+        name,
+        body,
+        response_tx,
+    } = cmd;
+    let request_id = *next_request_id;
+    *next_request_id += 1;
+    let sent = outbound_tx.send(MooMessage {
+        verb: MooVerb::Request,
+        name,
+        request_id,
+        headers: HashMap::new(),
+        body: body.map(MooBody::Json),
+    });
+    if sent.is_ok() {
+        pending.insert(request_id, response_tx);
+    }
+}
+
+/// Routes one inbound `CONTINUE`/`COMPLETE` to whichever `ConnectionRequests` caller is awaiting
+/// it (by request-id), dropping the registration once it's a `COMPLETE` or the caller's stream is
+/// gone — lazy cleanup: an abandoned [`requests::MooResponseStream`] is only reaped the next time
+/// a message for it fails to forward, not proactively on drop. Returns whether anything matched,
+/// for tests; the caller in `run_until_disconnected` doesn't need the value, an unmatched id is
+/// silently dropped either way.
+fn dispatch_response(
+    msg: MooMessage,
+    pending: &mut HashMap<u32, mpsc::UnboundedSender<MooMessage>>,
+) -> bool {
+    let request_id = msg.request_id;
+    let is_complete = msg.verb == MooVerb::Complete;
+    let forwarded = pending
+        .get(&request_id)
+        .is_some_and(|response_tx| response_tx.send(msg).is_ok());
+    if !forwarded || is_complete {
+        pending.remove(&request_id);
+    }
+    forwarded
 }
 
 /// Signals the transport to stop and waits for it, reporting a clean end regardless of what the
@@ -309,6 +412,126 @@ mod tests {
         assert_eq!(
             provided_service_for("com.roonlabs.pairing:10/subscribe_pairing"),
             None
+        );
+    }
+
+    fn continue_msg(request_id: u32) -> MooMessage {
+        MooMessage {
+            verb: MooVerb::Continue,
+            name: "Changed".to_string(),
+            request_id,
+            headers: HashMap::new(),
+            body: None,
+        }
+    }
+
+    fn complete_msg(request_id: u32) -> MooMessage {
+        MooMessage {
+            verb: MooVerb::Complete,
+            name: "Success".to_string(),
+            request_id,
+            headers: HashMap::new(),
+            body: None,
+        }
+    }
+
+    #[test]
+    fn handle_command_sends_request_starting_at_id_three_and_registers_pending() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let (response_tx, mut response_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let mut pending = HashMap::new();
+        let mut next_request_id = 3;
+
+        handle_command(
+            ConnectionCommand::SendRequest {
+                name: "com.roonlabs.transport:2/subscribe_zones".to_string(),
+                body: Some(serde_json::json!({"subscription_key": 0})),
+                response_tx,
+            },
+            &outbound_tx,
+            &mut pending,
+            &mut next_request_id,
+        );
+
+        assert_eq!(next_request_id, 4, "allocator advances past the id it used");
+
+        let sent = outbound_rx.try_recv().expect("a REQUEST was sent");
+        assert_eq!(sent.verb, MooVerb::Request);
+        assert_eq!(sent.name, "com.roonlabs.transport:2/subscribe_zones");
+        assert_eq!(
+            sent.request_id, 3,
+            "starts after handshake's own ids 1 and 2"
+        );
+        assert_eq!(
+            sent.body,
+            Some(MooBody::Json(serde_json::json!({"subscription_key": 0})))
+        );
+
+        // Registered under the id it was just given: a response for that id reaches it.
+        assert!(dispatch_response(continue_msg(3), &mut pending));
+        response_rx.try_recv().expect("forwarded to the caller");
+    }
+
+    #[test]
+    fn handle_command_skips_registration_when_transport_is_gone() {
+        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+        drop(outbound_rx); // simulates the transport having already ended
+        let (response_tx, _response_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let mut pending = HashMap::new();
+        let mut next_request_id = 3;
+
+        handle_command(
+            ConnectionCommand::SendRequest {
+                name: "com.roonlabs.transport:2/get_zones".to_string(),
+                body: None,
+                response_tx,
+            },
+            &outbound_tx,
+            &mut pending,
+            &mut next_request_id,
+        );
+
+        assert!(
+            pending.is_empty(),
+            "nothing to route responses to if the request was never actually sent"
+        );
+    }
+
+    #[test]
+    fn dispatch_response_keeps_pending_open_across_continues_and_closes_on_complete() {
+        let (response_tx, mut response_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let mut pending = HashMap::new();
+        pending.insert(5, response_tx);
+
+        assert!(dispatch_response(continue_msg(5), &mut pending));
+        assert!(
+            pending.contains_key(&5),
+            "a subscription stays open across CONTINUEs"
+        );
+        response_rx.try_recv().expect("first CONTINUE forwarded");
+
+        assert!(dispatch_response(complete_msg(5), &mut pending));
+        assert!(!pending.contains_key(&5), "COMPLETE closes the request");
+        response_rx.try_recv().expect("COMPLETE forwarded too");
+    }
+
+    #[test]
+    fn dispatch_response_ignores_unmatched_request_id() {
+        let mut pending = HashMap::new();
+        assert!(!dispatch_response(continue_msg(99), &mut pending));
+    }
+
+    #[test]
+    fn dispatch_response_reaps_pending_entry_once_caller_stream_is_dropped() {
+        let (response_tx, response_rx) = mpsc::unbounded_channel::<MooMessage>();
+        drop(response_rx); // the caller lost interest without unsubscribing
+        let mut pending = HashMap::new();
+        pending.insert(7, response_tx);
+
+        assert!(!dispatch_response(continue_msg(7), &mut pending));
+        assert!(
+            !pending.contains_key(&7),
+            "a failed forward reaps the entry lazily, per requests.rs's doc comment"
         );
     }
 }
