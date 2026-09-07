@@ -1,10 +1,6 @@
 //! SOOD packet parsing and encoding (TLV wire format), per
-//! `docs/protocol/sood-moo.md`.
-//!
-//! Not wired into a socket yet — `sood/discovery.rs` (added in a later step) is what
-//! actually sends/receives these over UDP multicast. Until then this module is inert
-//! scaffolding, so its items are unused outside their own tests.
-#![allow(dead_code)]
+//! `docs/protocol/sood-moo.md`. Used by `sood/discovery.rs` to send/receive these over UDP
+//! multicast.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

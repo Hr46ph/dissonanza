@@ -1,10 +1,8 @@
 //! MOO websocket transport: opens the connection to a Roon Core's MOO endpoint and keeps it
 //! alive with an application-level WS ping/pong, per `docs/protocol/sood-moo.md`.
 //!
-//! Not wired into a connection state machine yet — `moo::handshake` (a later step) is what
-//! actually drives registration/pairing over this transport. Until then this module's items
-//! are unused outside their own tests.
-#![allow(dead_code)]
+//! Driven by `connection/mod.rs`, which layers `moo::handshake`'s registration/pairing/ping
+//! request-response traffic on top of this transport's outbound/inbound channels.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -24,7 +22,7 @@ use super::message::{MooError, MooMessage};
 pub(crate) const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum TransportError {
+pub enum TransportError {
     #[error("failed to connect to {addr}: {source}")]
     Connect {
         addr: SocketAddr,

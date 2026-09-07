@@ -1,10 +1,8 @@
 //! SOOD multicast discovery: per-interface sockets, periodic queries, and dedupe of
 //! discovered Roon Cores, per `docs/protocol/sood-moo.md`.
 //!
-//! Not wired into `connection::mod` yet — that happens once the connection state machine
-//! (a later step) exists to consume `DiscoveredCore` events and decide when discovery should
-//! stop (a Core is paired). Until then this module's items are unused outside their own tests.
-#![allow(dead_code)]
+//! Driven by `connection/mod.rs`, which consumes `DiscoveredCore` events and stops discovery
+//! (via `stop_rx`) once it has picked a candidate to connect to.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -36,7 +34,7 @@ const QUERY_STEADY_INTERVAL: Duration = Duration::from_secs(60);
 const RECV_BUF_SIZE: usize = 2048;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum DiscoveryError {
+pub enum DiscoveryError {
     #[error("failed to enumerate network interfaces: {0}")]
     InterfaceEnumeration(#[source] io::Error),
     #[error("failed to set up discovery socket on {addr}: {source}")]

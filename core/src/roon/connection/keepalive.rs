@@ -2,12 +2,8 @@
 //! that event pair is known to not always fire `core_unpaired` correctly on its own (see
 //! `moo::handshake`'s pairing module for the sourced `node-roon-api` bug that motivates this).
 //! [`Keepalive`] tracks when activity (any inbound MOO message) was last observed and reports
-//! the connection stale once too much time has passed with none — the signal a connection state
-//! machine can use to force `Unpaired`/`Disconnected` regardless of whether the event pair fired.
-//!
-//! Not wired into a connection state machine yet, so its items are unused outside their own
-//! tests.
-#![allow(dead_code)]
+//! the connection stale once too much time has passed with none — the signal `connection/mod.rs`
+//! uses to force `Disconnected` regardless of whether `core_paired`/`core_unpaired` fired.
 
 use std::time::{Duration, Instant};
 

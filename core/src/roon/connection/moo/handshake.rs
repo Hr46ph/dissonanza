@@ -3,9 +3,7 @@
 //! extension provides in response, per `docs/protocol/sood-moo.md`.
 //!
 //! Operates purely over the outbound/inbound [`MooMessage`] channels `moo::transport` already
-//! exposes — independently testable without a real websocket. Not wired into a connection state
-//! machine yet, so its items are unused outside their own tests.
-#![allow(dead_code)]
+//! exposes — independently testable without a real websocket. Driven by `connection/mod.rs`.
 
 use std::collections::HashMap;
 
@@ -15,7 +13,7 @@ use super::super::config::ConnectionConfig;
 use super::message::{MooBody, MooMessage, MooVerb};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum HandshakeError {
+pub enum HandshakeError {
     #[error("connection closed before the {0} step completed")]
     ConnectionClosed(&'static str),
     #[error("registry:1/register failed: {0}")]

@@ -1,11 +1,9 @@
 //! MOO message framing (parsing and encoding), per `docs/protocol/sood-moo.md`.
 //!
 //! One WebSocket message equals one MOO message — the WS layer already gives framing,
-//! so this module never has to resync mid-stream. Not wired into a websocket yet —
-//! `moo/transport.rs` (added in a later step) is what actually sends/receives these
-//! over the connection. Until then this module is inert scaffolding, so its items are
-//! unused outside their own tests.
-#![allow(dead_code)]
+//! so this module never has to resync mid-stream. Used by `moo/transport.rs` to
+//! send/receive these over the connection, and by `connection/mod.rs` to dispatch
+//! inbound requests to the services this extension provides.
 
 use std::collections::HashMap;
 
