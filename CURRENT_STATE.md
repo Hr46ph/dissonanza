@@ -143,13 +143,8 @@ dissonanza/
   open: pairing-token persistence, reconnect has no backoff yet (a disconnect that fails
   immediately and repeatedly — e.g. interface enumeration erroring on every attempt — loops back
   to `Discovering` with no delay; not part of 3.3's scoped behavior, flagged here rather than
-  silently added), the discovery-keeps-running-as-a-fallback-while-paired question noted under
-  `sood::discovery` above (distinct from reconnect-after-disconnect, which is now done), and a
-  newly-found gap in `moo::handshake::register` (see dated entry below): it never sends
-  `required_services`/`optional_services` in the registration body, though
-  `docs/protocol/sood-moo.md` documents both as expected alongside `provided_services` — plausibly
-  why a real Core closes the connection right after `register` rather than creating a pending
-  Settings → Extensions entry.
+  silently added), and the discovery-keeps-running-as-a-fallback-while-paired question noted under
+  `sood::discovery` above (distinct from reconnect-after-disconnect, which is now done).
   - ~~Custom Rust SOOD/MOO protocol implementation needs its own wire-protocol study~~ — **done**, see
     [docs/protocol/sood-moo.md](docs/protocol/sood-moo.md): packet/message formats, the
     connection/registration/pairing handshake, and the keepalive rationale behind CLAUDE.md §1,
@@ -169,6 +164,17 @@ dissonanza/
 
 ## Recently changed
 
+- Fixed `moo::handshake::register` to send `required_services`/`optional_services` (2026-09-07):
+  the registration body previously only declared `provided_services`, though
+  `docs/protocol/sood-moo.md` documents all three as expected — the likely reason a real Core
+  closed the connection right after `register` during the Phase 4.1 testing recorded below,
+  instead of creating a pending Settings → Extensions entry. `register()` now takes
+  `required_services`/`optional_services` parameters alongside the existing `provided_services`
+  one; `connection/mod.rs` passes empty slices for both via new `REQUIRED_SERVICES`/
+  `OPTIONAL_SERVICES` consts, since no per-service Core API module (`transport:2`, `browse:1`,
+  ...) is implemented yet to need one — a future phase adding one fills in the relevant list.
+  Follow-up to (not part of) Phase 4; live re-verification against a real Core is left to the
+  user rather than run automatically, given what happened during the Phase 4.1 attempt.
 - Accepted unit-test-only coverage as final for Phase 4.1 (2026-09-07): per user decision, no
   further automated end-to-end test is planned for `core::roon::connection` — the existing 49
   per-module unit tests plus manual verification against a real Core stand as this module's test
