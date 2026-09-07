@@ -38,11 +38,12 @@ const PROVIDED_SERVICES: &[&str] = &[handshake::PAIRING_SERVICE, handshake::PING
 /// Core-provided services this extension needs (`required_services`) or optionally uses
 /// (`optional_services`), declared during `moo::handshake::register` per
 /// `docs/protocol/sood-moo.md`. `com.roonlabs.transport:2` is required now that
-/// `core::roon::transport` exists (IMPL_TRANSPORT.md Phase 2) — kept as a literal here rather than
-/// a constant imported from `transport`, so `connection` stays ignorant of `transport:2`
-/// specifically beyond needing its name to register, per CLAUDE.md §1. `browse:1`/`image:1` will
-/// each add their own entry when implemented.
-const REQUIRED_SERVICES: &[&str] = &["com.roonlabs.transport:2"];
+/// `core::roon::transport` exists (IMPL_TRANSPORT.md Phase 2), and `com.roonlabs.browse:1` now
+/// that `core::roon::browse` exists (IMPL_BROWSE.md Phase 1) — both kept as literals here rather
+/// than constants imported from their own modules, so `connection` stays ignorant of them
+/// specifically beyond needing their names to register, per CLAUDE.md §1. `image:1` will add its
+/// own entry when implemented.
+const REQUIRED_SERVICES: &[&str] = &["com.roonlabs.transport:2", "com.roonlabs.browse:1"];
 const OPTIONAL_SERVICES: &[&str] = &[];
 
 /// How long the app-level keepalive tolerates no inbound MOO activity (a `pair` request, a
