@@ -1,0 +1,70 @@
+// Root window skeleton for IMPL_UI_SHELL.md Phase 1: proves the Slint/tokio bridge (see
+// src/core_bridge.rs) delivers live `ConnectionState` transitions to the UI thread. Regions are
+// still just flat rectangles (no real sidebar/list/transport-bar content yet — that's Phase 2+),
+// but colored with DESIGN.md's actual sampled dark-theme tokens rather than arbitrary placeholder
+// grays, since those values already exist. A proper light/dark global palette singleton (so this
+// isn't hardcoded to dark) is Phase 2 work, not repeated here for a skeleton with no theme toggle
+// yet.
+export component AppWindow inherits Window {
+    title: "Dissonanza";
+    preferred-width: 1024px;
+    preferred-height: 720px;
+    background: #161616; // DESIGN.md dark --bg
+
+    in-out property <string> connectionStatus: "Not started";
+
+    HorizontalLayout {
+        Rectangle {
+            width: 220px;
+            background: #222222; // DESIGN.md dark --surface
+
+            VerticalLayout {
+                padding: 12px;
+                alignment: start;
+
+                Text {
+                    text: "Sidebar (placeholder)";
+                    color: #919191; // DESIGN.md dark --text-secondary
+                }
+            }
+        }
+
+        VerticalLayout {
+            Rectangle {
+                background: #161616; // DESIGN.md dark --bg
+
+                VerticalLayout {
+                    padding: 24px;
+                    spacing: 12px;
+                    alignment: start;
+
+                    Text {
+                        text: "Content area (placeholder)";
+                        color: #919191; // DESIGN.md dark --text-secondary
+                    }
+
+                    Text {
+                        text: "Connection: " + root.connectionStatus;
+                        color: #ffffff; // DESIGN.md dark --text-primary
+                        font-size: 20px;
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 96px;
+                background: #222222; // DESIGN.md dark --surface
+
+                VerticalLayout {
+                    padding: 12px;
+                    alignment: start;
+
+                    Text {
+                        text: "Now-playing bar (placeholder)";
+                        color: #919191; // DESIGN.md dark --text-secondary
+                    }
+                }
+            }
+        }
+    }
+}

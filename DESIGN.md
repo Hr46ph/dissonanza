@@ -15,51 +15,247 @@ This product also has surfaces Roon's official app doesn't have at all: zoomable
 
 ## Color tokens
 
-TBD — pending user-supplied screenshots of Roon's official light and dark UI to sample from. Once supplied, fill in both theme tables below in the same format:
+Sampled 2026-09-08 from 48 user-supplied screenshots of the real Roon desktop app (26 dark, 22 light,
+`~/Pictures/Screenshots`, timestamps `Screenshot_20260908_160535` through `_161303` = dark, `_161618`
+onward = light) plus two named dialog captures. Values are direct pixel/histogram reads (ImageMagick,
+`convert ... histogram:info:`) of specific UI elements (sidebar nav text, list-row text, dropdown fills),
+not eyeballed — per this file's sourcing rule. Anti-aliasing means each read has a small spread (noted
+inline); the value given is the cluster peak.
 
 ```
-:root[data-theme="light"] { --bg: ...; --surface: ...; --accent: ...; --text-primary: ...; }
-:root[data-theme="dark"]  { --bg: ...; --surface: ...; --accent: ...; --text-primary: ...; }
+:root[data-theme="light"] {
+  --bg: #FFFFFF;             /* main content canvas */
+  --surface: #FAFAFA;        /* sidebar / elevated panel */
+  --surface-alt: #F6F6F6;    /* empty-state card fill, sits on --bg */
+  --accent: #7D7DF3;         /* active nav, loved-heart fill, link text, primary buttons (observed range #7D7DF3-#8888F4) */
+  --accent-selected-bg: #D9D9F5; /* pale-lavender fill for a selected row in a dropdown/menu */
+  --text-primary: #3A3A3D;   /* NOT pure black */
+  --text-secondary: #8F8F8F; /* metadata, column headers, nav section labels (observed range #8F8F8F-#ABABAB) */
+  --border: rgba(0,0,0,0.08);/* hairline row/column dividers — close to --bg, not a strong line */
+}
+:root[data-theme="dark"] {
+  --bg: #161616;             /* main content canvas */
+  --surface: #222222;        /* sidebar / elevated panel — lighter than --bg, not darker */
+  --accent: #686CD5;         /* active nav, loved-heart fill, link text, primary buttons */
+  --accent-selected-bg: #3A3C68; /* muted-indigo fill for a selected row in a dropdown/menu */
+  --text-primary: #FFFFFF;   /* pure white */
+  --text-secondary: #919191; /* metadata, column headers, nav section labels */
+  --border: rgba(255,255,255,0.06); /* hairline row/column dividers */
+}
 ```
+
+Both themes share one accent hue (blue-violet, R≈G, B substantially higher) sampled from three
+independent sources that agree with each other: the active sidebar item, the "loved" heart icon on a
+track row, and primary/CTA buttons ("Play now") — treat these as one token, not three coincidentally
+similar colors. `--surface` is consistently the *elevated* shade relative to `--bg` in both themes (a hair
+lighter in dark, a hair darker in light) — sidebars/panels read as "raised," never as a darker recess.
 
 | Pair | Theme | Ratio | Verdict |
 |---|---|---|---|
-| *(TBD once tokens are sampled)* | | | |
+| `--bg` / `--text-primary` | dark | 18.10:1 | AA normal ✅ |
+| `--bg` / `--text-secondary` | dark | 5.74:1 | AA normal ✅ |
+| `--bg` / `--accent` (as link text) | dark | 4.05:1 | **Fails AA normal-text (4.5:1); clears large-text/non-text (3:1) only** |
+| `--surface` / `--text-primary` | dark | 15.91:1 | AA normal ✅ |
+| `--surface` / `--text-secondary` | dark | 5.05:1 | AA normal ✅ |
+| `--bg` / `--text-primary` | light | 11.34:1 | AA normal ✅ |
+| `--bg` / `--text-secondary` | light | 3.23:1 | **Fails AA normal-text; clears large-text/non-text only** |
+| `--bg` / `--accent` (as link text) | light | 3.44:1 | **Fails AA normal-text; clears large-text/non-text only** |
+| `--surface` / `--text-primary` | light | 10.86:1 | AA normal ✅ |
 
-Check every text/background pairing against WCAG 2.1 AA (4.5:1 normal text, 3:1 large text/non-text) in **both** themes before adopting a token. Flag any token that only clears the 3:1 non-text threshold as decorative/border/icon-only — never a text color.
+**Flagged, not resolved**: Roon's own UI uses `--accent` for small link-style text (artist/album names in
+list rows) and `--text-secondary` for metadata in *both* themes at sizes that don't clear WCAG AA's 4.5:1
+normal-text threshold — this file's own checklist says a token that only clears 3:1 should be
+decorative/icon-only, never a text color, but that's exactly how the sampled source app uses these two.
+This is a real tension between the pixel-parity goal (CLAUDE.md era priority, explicit user instruction)
+and this file's own accessibility bar. Not resolved here — flagged for a decision when Phase 2+ of
+IMP_UI_SHELL.md builds the components that need it: match Roon exactly (accept the gap) or nudge these
+two tokens' lightness slightly darker/lighter until they clear 4.5:1 while keeping the same hue.
 
 ## Typography scale
 
-TBD — pending screenshots. Fill in once sampled:
+Sampled 2026-09-08, same screenshot set. **Two distinct type families, used consistently across every
+sampled screen** — not a stylistic accident on one page:
 
-| Role | Size | Weight | Case/spacing |
+- **A serif display face** for every page title ("My Tracks", "My Albums", "Folders", "Genres", ...) and
+  for section headings inside overlays (the "Lyrics" heading in the now-playing view). Regular weight,
+  not bold — a fairly thin stroke contrast, elegant/editorial in character.
+- **A sans-serif face** for everything else: sidebar nav, list/table content, buttons, metadata, lyrics
+  body text.
+
+**Flagged, unconfirmed**: the exact typeface names are unknown — Roon likely licenses both rather than
+using a common open font, and no metadata/font-matching tool was run against the screenshots. Recommend
+picking a comparable open-source pairing for implementation (e.g. a humanist/editorial serif such as Lora
+or Source Serif 4 for headings, a geometric/humanist sans such as Inter for everything else) and treating
+it as a deliberate substitution, not an attempt at an exact font match.
+
+Pixel measurements below are as captured in the screenshots (unknown source display scale factor — the
+window's own logical pixel size is not recoverable from a raster capture) — use the **ratios**, not the
+absolute px counts, when translating into Slint's logical units:
+
+| Role | Measured | Weight | Case/spacing |
 |---|---|---|---|
-| *(TBD)* | | | |
+| Page title (serif) | ~56px glyph box height | Regular | Sentence case |
+| Section label (BROWSE / MY LIBRARY / PLAYLISTS / FAVORITES / FOLDERS) | small, well under body size | Semi-bold | ALL CAPS, letter-spaced |
+| Body / list content (nav items, track titles, button labels) | baseline unit — list-row height measured at ~80px including a ~56px square art thumbnail plus padding | Regular; track titles read slightly heavier than nav items | Sentence case |
+| Caption / metadata (page subtitle counts, column headers, durations, artist byline under a now-playing track title) | smaller than body | Regular | Sentence case |
+
+Approximate ratio: page title ≈ 3.5-5× the body/caption size (the exact multiple is confounded by
+anti-aliasing at the edges of both measurements — treat "clearly a large display face, clearly bigger
+than everything else on the page" as the confirmed part, the precise multiplier as a judgment call for
+implementation).
 
 ## Layout
 
 Two primary content-view modes, per decision in the research doc:
 - **Grid/tile view** — zoomable; tile size and art resolution scale together (see Visual language above).
-- **List view** — adds extra info fields per row not shown in the grid.
+  Sampled from "My Albums": square 1:1 art tiles in a fixed-column-count row (4 visible in an ~860px-wide
+  content crop, more off-screen), each tile's own cover art usually carries the visible title/artist text
+  baked into the artwork — but the tile *component* still reserves a caption area below the art (album
+  title, then artist, two lines, sans-serif, title in `--text-primary`/artist in `--text-secondary`),
+  confirmed on tiles whose cover art doesn't already show text prominently.
+- **List view** — adds extra info fields per row not shown in the grid. Sampled from "My Tracks": a
+  sortable column-header row (`#`, Track, Length, Album artist, Album, ... each optionally with its own
+  inline search icon; the currently-sorted column is `--accent`-colored with a caret), then rows of
+  `~56px` square art thumbnail + track title (`--text-primary`) + a small "multiple versions" glyph +
+  duration + a drag-handle (four-way-arrow) icon + a love-heart icon + artist/album as `--accent`-colored
+  link text. Rows are separated by a hairline `--border`, no zebra-striping observed.
 
-Sidebar categories mirror Roon's own sidebar structure (genres, Tidal, live radio, listen later, tags, history, albums, artists, tracks, composers, compositions, my live radio, folders, playlists) — concrete layout TBD pending screenshots.
+**Page header pattern** (confirmed identical on every "My X" library page sampled — Tracks, Albums,
+Artists, History, Composers, Compositions, Playlists, Folders, Genres): serif page title, a muted
+`--text-secondary` item-count subtitle directly under it, then (on collection pages with playable
+content) a split primary button — a solid `--accent`-filled pill "▶ Play now" with a darker attached
+chevron segment that opens a play-mode dropdown (shuffle/radio/etc.) — then a "› Focus" filter-breadcrumb
+control plus a circular outline "favorite items only" heart-filter toggle. Empty-state pages (sampled:
+"My Tags", "Folders", "My Live Radio") drop the play button and instead show a `--surface-alt` rounded
+card with a centered outline icon and one or two lines of instructional copy (e.g. "Click the favorite
+button on a folder to add it to your favorites").
 
-A separate, app-owned settings screen (not Roon Core's settings) covers: Roon Core connection, Last.fm, view settings, and the light/dark mode toggle. Concrete layout TBD pending screenshots.
+Sidebar categories (confirmed directly from full-height sidebar crops, both themes, identical structure):
+three labeled sections, uppercase `--text-secondary` section headers —
+- **BROWSE**: Home, Genres, TIDAL, Live Radio, Listen Later, Tags, History
+- **MY LIBRARY**: Albums, Artists, Tracks, Composers, Compositions, My Live Radio, Folders
+- **PLAYLISTS** (header has its own collapse-chevron, `+` add, and `···` overflow controls): the user's
+  own playlists, flat list, no further grouping observed
+
+Each row is an icon + label; the active route is `--accent`-colored (both icon and text), inactive rows
+are `--text-secondary`. Above the sections: a "roon" wordmark, a gear (settings) icon, and a `···` overflow
+menu. Below the sidebar's scrollable area: a persistent mini now-playing strip (art thumbnail + title +
+artist), which is the sidebar's visual anchor to the main transport bar below it.
+
+A separate, app-owned settings screen (not Roon Core's settings) covers: Roon Core connection, Last.fm,
+view settings, and the light/dark mode toggle. **Layout sampled 2026-09-08** from 8 screenshots of Roon's
+own Settings screen (light + dark) — captured deliberately for chrome/layout only, not content: Roon's
+actual settings are Core-internal and permanently out of scope per CLAUDE.md's mandatory technical
+choices, so nothing about *what* these screenshots configure carries over, only *how the screen is built*:
+
+- **Two-level navigation**: a bold "Settings" title, then a flat list of section names below it (General,
+  Storage, Services, Setup, ..., About) in a dedicated sub-sidebar column between the main sidebar and the
+  content pane — same active-item treatment as the main sidebar (accent color) *plus* an accent underline,
+  a stronger emphasis than the main sidebar uses (which relies on color alone). Given this file's own
+  accessibility rule ("color is never the sole signal for state"), copy the underline too, not just the
+  color, when building this sub-nav.
+- **Section-grouped rows**: uppercase `--text-secondary` group headers (e.g. "BROWSING PREFERENCES") above
+  clusters of rows, each row a label (+ optional smaller `--text-secondary` description line beneath it)
+  on the left and a control on the right — a toggle, a "Value ▾" dropdown, a text input, or a button.
+- **A connection-status card pattern** (sampled from Roon's own "ROON SERVER" card): icon + name + a
+  metadata line (address) + status text, with action buttons (primary/secondary, see Components) at the
+  trailing edge and a dismiss/disconnect action at the card's top-right corner. This is the direct model
+  for our own settings screen's Core-connection section — swap Roon-account fields for
+  `core::roon::connection`'s own `ConnectionState`/paired-Core-id.
+
+No further screenshot needed before Phase 5 — see Components below for the new controls this uncovered
+(toggle switch, primary/secondary buttons, text input).
 
 ## Components
 
-- **Love/unlove toggle** — binary, surfaces Roon's own native track-love control exactly as Roon presents it (no star/half-star granularity). Roon already syncs this to Last.fm on its own, so no app-side rating storage or matching logic is needed. Since it has a direct Roon equivalent, sample its visual treatment from screenshots like any other Roon-parity control (see Visual language) — unlike the genuinely new zoom/list surfaces, this isn't a net-new style to invent.
-- **Grid tile** — art + zoom-responsive sizing (see Layout).
-- **List row** — art thumbnail + extra info fields (see Layout).
-- **Theme toggle** — must apply instantly, no restart (see Visual language).
+- **Love/unlove/ban control** — binary love/unlove toggle plus a ban (thumbs-down/skip-and-don't-replay) control, treated as one group per user decision (2026-09-08), surfacing Roon's own native controls exactly as Roon presents them (no star/half-star granularity). Roon already syncs love/unlove to Last.fm on its own, so no app-side rating storage or matching logic is needed. Since these have a direct Roon equivalent, sample their visual treatment from screenshots like any other Roon-parity control (see Visual language) — unlike the genuinely new zoom/list surfaces, this isn't a net-new style to invent. Backend wiring is deferred (see IMPL_UI_SHELL.md); this entry covers visual treatment only.
+  - **Confirmed placement/visual**: a heart-outline icon per track row in list views ("My Tracks" sampled
+    in both themes) — outline-only (`--text-secondary`) when not loved, filled/stroked in `--accent` when
+    loved. A circular outline heart button also appears in every page header as a "favorite items only"
+    filter toggle (same glyph, different purpose — don't conflate the two visually).
+  - **Not yet located**: no heart/ban icon was visible in the bottom mini transport bar or the now-playing
+    overlay's top icon row in the sampled screenshots (that overlay's icon row — a tag/ribbon glyph,
+    person, album, lyrics, and others — wasn't captured at high enough resolution to identify each icon
+    with confidence). A ban control wasn't observed anywhere in this screenshot set at all — it likely
+    only surfaces on radio/station-type sources, none of which were captured. **Flagged, not resolved**:
+    where ban actually lives in Roon's UI needs a further screenshot (an internet-radio or Tidal-station
+    now-playing view) before this control can be built with confidence.
+- **Grid tile** — square 1:1 art, zoom-responsive sizing (see Visual language), optional two-line
+  title/artist caption below when the art itself doesn't already carry that text (see Layout).
+- **List row** — `~56px` art thumbnail + title (`--text-primary`) + accent-linked artist/album fields +
+  duration + drag-handle + love icon, hairline `--border` between rows, no zebra-striping (see Layout).
+- **Page header** — serif title + muted count subtitle + split "Play now ▾" primary button (`--accent`
+  fill, darker attached dropdown segment) + Focus/favorite-filter row (see Layout's page header pattern).
+- **Empty state** — a `--surface-alt` rounded card, centered outline icon, one to two lines of muted
+  instructional copy, no title (see Layout).
+- **Dropdown/menu** (zone picker, output menu) — a `--surface`-toned panel; a hovered/selected row gets
+  `--accent-selected-bg` fill with primary-colored text/icon, not a border or underline. Sampled from the
+  zone-switcher popup ("Xonar" zone + "Pause all") and the per-output settings menu (standby/DSP/group/
+  settings icons — see Icons below for which of these are actually in scope).
+- **Bottom transport bar** — persistent, full-width, `--surface`-toned. Left: art thumbnail + track title
+  (`--text-primary`, bold) + artist byline (`--text-secondary`) below it, or "Nothing playing" in
+  `--text-secondary` when idle. Center: prev/play-pause/next icon buttons + a queue-list icon, then a
+  seek bar (thin `--border`-toned track, `--accent`-filled played portion, circular thumb, flanked by
+  elapsed/remaining time in `--text-secondary`) — the seek bar has no fill and controls render idle/dim
+  when nothing is playing. Right: output/speaker icon + zone name label, then a volume icon opening the
+  volume popover.
+- **Toggle switch** (sampled 2026-09-08 from Roon's own Settings screen — layout/chrome only, see
+  Layout's Settings note) — a pill track with a circular thumb. On: `--accent` fill (`#686CD5` dark /
+  `#8787F5` light, matching the accent already sampled elsewhere), white thumb, positioned right. Off: a
+  neutral mid-grey fill (`#3B3B3B` dark, `#DBDBDB` light — a dedicated "control-off" shade, distinct from
+  both `--surface` and `--bg`), a slightly darker/lighter thumb of the same hue (low-contrast against its
+  own track by design — Roon doesn't rely on the thumb alone here, the adjacent "Yes"/"No" text label
+  carries the state), positioned left. Always paired with a text label ("Yes"/"No" in the samples) per
+  this file's own "color is never the sole signal for state" rule. This is the direct model for
+  DESIGN.md's light/dark theme toggle.
+- **Buttons — primary vs. secondary** (same source): primary actions ("Play now", "View account info",
+  "Enable") are solid `--accent`-filled pills with white/primary-on-accent text. Secondary/lesser actions
+  ("Find", "Clear cache", "Add HQPlayer", "Logout") are a muted cool-grey pill (`#C5C9D1`-ish light theme,
+  tinted slightly toward the accent hue rather than neutral grey) with `--text-primary` text — visually
+  quieter but still a filled pill, never a plain text link, for anything that's a real action.
+- **Text input** — a white/`--bg`-toned field with a thin `--border`-ish grey outline and a large,
+  roughly-half-height corner radius (not a full pill). No inset/focus style was caught in the sampled
+  screenshots — flagged as unconfirmed, same as other hover/focus states in this file.
+- **Settings row** — see Layout's Settings section: label (+ optional muted description line) left,
+  control right, section-grouped under an uppercase `--text-secondary` header.
+- **Theme toggle** — must apply instantly, no restart (see Visual language). Built from the Toggle switch
+  component above.
 
-Full default/hover/focus/disabled states per component: TBD pending screenshots.
+Full hover/focus/disabled states per component: mostly still TBD — static screenshots only reliably
+caught one dropdown's hover state (the `--accent-selected-bg` row above) and the idle/disabled look of
+transport controls with nothing playing. Deliberate hover/focus/disabled screenshots would need a future
+follow-up if closer parity on those states matters before Phase 2+ of IMPL_UI_SHELL.md builds them.
 
 ## Icons
 
 Hand-rolled inline SVG — the icon set is small and fixed (playback controls, love/unlove, zoom in/out, grid/list toggle, settings, sidebar categories). No icon-library dependency. Revisit only if a later phase needs a materially broader icon set.
 
-Concrete inventory: TBD, finalized once the component list above is locked down.
+**Concrete inventory, confirmed from screenshots (2026-09-08)** — all simple outline-style glyphs, no
+filled/duotone icons observed except the loved-heart's filled accent state:
+
+Sidebar: home, genre/tag-stack, TIDAL's own diamond-cluster mark, radio-waves (reused identically for
+both "Live Radio" and "My Live Radio"), clock-with-tag (Listen Later), price-tag (Tags), list-lines
+(History), globe (Albums), two-people (Artists), musical-note (Tracks), piano-keys-with-person
+(Composers), lock-like glyph (Compositions), folder (Folders), chevron (section collapse / breadcrumbs),
+`+` (add playlist), `···` (overflow menu), gear (settings).
+
+List rows / page headers: search/magnifying-glass (per-column filter), caret (active sort direction),
+four-way-arrow (drag-to-reorder), heart outline/filled (love — see Components), circular heart-outline
+button (favorite-filter toggle, visually identical glyph to the love icon but a different function —
+don't conflate).
+
+Transport bar: previous, play, pause, next, a queue/list-with-arrow icon, a speaker/output-box icon, a
+volume/speaker-with-waves icon.
+
+Output/zone menus: moon (standby — **in scope**, `transport::control::standby` already exists),
+waveform (DSP), shuffle-style double-arrow (zone grouping/transfer), gear (device settings) — the latter
+three are **out of scope**: they reach into Core-internal Audio Setup/DSP/Zone config, which CLAUDE.md's
+mandatory technical choices permanently exclude. Render them only if a future screen needs to visually
+match a menu that contains one, never wire them to anything.
+
+**Not yet confirmed**: the now-playing overlay's top-right icon row (tag/ribbon, person, album, lyrics,
+and others) wasn't resolved to specific functions at the sampled resolution — needs a closer screenshot
+before those icons can be drawn with confidence. Ban's icon is entirely unconfirmed (see Components).
 
 ## Integration with the Roon image API
 

@@ -71,8 +71,16 @@ dissonanza/
 │                                    #   on ConnectionRequests only, no SOOD/pairing/reconnect, no session
 │                                    #   state (browse-stack state lives Core-side)
 ├── app/                  # `dissonanza` crate (binary) — Slint UI shell, depends on core's public API
+│   ├── build.rs              # compiles ui/AppWindow.slint via slint-build
+│   ├── ui/
+│   │   └── AppWindow.slint       # root window: sidebar/content-area/now-playing-bar placeholders,
+│   │                             #   a connectionStatus property — unstyled, DESIGN.md's tokens land
+│   │                             #   starting Phase 2 of IMPL_UI_SHELL.md
 │   └── src/
-│       └── main.rs           # trivial placeholder, no Slint wired up yet
+│       ├── main.rs           # AppWindow::new() -> core_bridge::spawn(weak) -> ui.run()
+│       └── core_bridge.rs    # Slint/tokio bridge (IMPL_UI_SHELL.md Phase 1): a background thread's
+│                              #   own tokio runtime drives Connection::spawn, forwards ConnectionEvent
+│                              #   to the UI thread via slint::invoke_from_event_loop
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml       # format/lint/test on every push/PR, version-bump guardrail on PRs into main
@@ -273,6 +281,21 @@ dissonanza/
     separately tested beyond type-checking plus `Hierarchy`/options serialization-shape assertions,
     mirroring the precedent `subscribe_zones`/`control`/`seek` all set.
 
+- **`app`** (`app/`) — the `dissonanza` binary, Slint UI shell. `core_bridge` (IMPL_UI_SHELL.md Phase 1)
+  is the seam between Slint's own blocking, single-threaded event loop and `core`'s `tokio`-async,
+  channel-based API: a background OS thread builds its own current-thread `tokio::runtime::Runtime`,
+  calls `Connection::spawn`, and forwards each `ConnectionEvent` to the UI thread via
+  `slint::invoke_from_event_loop`, setting `AppWindow`'s `connectionStatus` property (Slint preserves a
+  `.slint` property's exact camelCase spelling in its generated Rust accessor names — confirmed by
+  `cargo check`, not assumed — so the setter is `set_connectionStatus`, not `set_connection_status`).
+  `AppWindow.slint` itself stays pure view: three placeholder regions (sidebar/content-area/now-playing-
+  bar) and one label bound to `connectionStatus`, no `core` types or async logic reachable from `.slint`.
+  `ConnectionHandle`/`ConnectionRequests` are held alive for `core_bridge`'s whole lifetime but otherwise
+  unused this phase — no shutdown-on-window-close wiring yet, and no other module sends its own requests
+  yet. Extension identity (`connection_config()`) uses real values already established elsewhere in this
+  repo for `extension_id`/`publisher` (the Flatpak app-id, the git identity) but guesses `email`/`website`
+  — flagged in Open work below for the user to correct.
+
 ## Open work
 
 - `core::roon::connection` implementation in progress on `feature/roon-connection-core` (branched from
@@ -320,17 +343,99 @@ dissonanza/
   docs/protocol/browse.md confirms whether a Core-side browse-stack position survives a `connection`
   reconnect. Non-goals for this phase: `image:1`, Slint UI (see NORTH-STAR.md/IMPL_BROWSE.md's own
   non-goals), multi-zone/multi-Core (permanent, per NORTH-STAR.md).
-- Slint GUI: not started (app/src/main.rs is a trivial placeholder).
+- Slint GUI: underway on `IMPL_UI_SHELL.md` (gitignored, not a tracked file, per the same `/IMPL_*.md`
+  precedent every prior phase used). Phase 0 (DESIGN.md sampling from screenshots) and Phase 1 (Slint/
+  tokio integration bridge + an unstyled window skeleton) are both done — see the `app` entry under
+  Modules above and DESIGN.md for the sampled tokens. Phases 2-5 (zone picker, now-playing/transport,
+  browse/grid/list, settings) are outlined only, pending these two landing. Phase 1's rendered window was
+  visually confirmed by the user (`Dissonanza_slint_example.png`): correct regions, live "Connection:
+  discovering" status. Per the user's follow-up feedback, the skeleton's placeholder regions were then
+  recolored from arbitrary grays to DESIGN.md's actual sampled dark-theme tokens (`--bg`/`--surface`/
+  `--text-primary`/`--text-secondary`) — cheap to do now that Phase 0 already produced real values, even
+  though a proper light/dark palette singleton is still Phase 2 work. Still open: no shutdown-on-window-
+  close handling yet, and `connection_config`'s `email`/`website` fields are guesses pending the user's
+  real contact details.
 - Pairing-token persistence (so a paired extension doesn't have to re-pair on every restart) is
   deferred until a cache-store phase exists — the MOO handshake step will hold it in memory only.
 - Cache invalidation strategy for locally cached album art (when to refresh on a new Roon scan or changed art) undecided.
-- DESIGN.md's color tokens, typography scale, and concrete component states are marked TBD pending user-supplied screenshots of Roon's official UI.
+- DESIGN.md's color tokens, typography scale, and layout/component detail (including the settings screen and a toggle-switch/button/text-input set) are now sampled from screenshots (2026-09-08, see Recently changed). Still open: love/unlove/ban's exact on-screen placement outside list rows, and hover/focus/disabled states for most components.
 - Flatpak submission is blocked on making the repo public (currently private, see TECH_STACK.md) and on generating `cargo-sources.json` once real dependencies are locked in.
 - AUR push in `publish.yml` is scaffolded but inert until `AUR_SSH_PRIVATE_KEY`/`AUR_USERNAME`/`AUR_EMAIL` secrets are configured, and until the package is claimed on AUR with a first manual push.
 - `PKGBUILD` checksums are placeholders (`SKIP`) until a real `v0.1.0` tag exists.
 
 ## Recently changed
 
+- Sampled DESIGN.md's Settings-screen layout from 8 further screenshots (2026-09-08): captured
+  deliberately for chrome/layout only, not content — Roon's own Settings controls Core-internal state
+  (Audio Setup, DSP, etc.) that CLAUDE.md's mandatory technical choices permanently keep out of scope, so
+  nothing about *what* these screenshots configure carries over, only *how the screen is built*. Added to
+  DESIGN.md: a two-level settings navigation pattern (bold "Settings" title, flat section list, active
+  item gets an accent underline *in addition to* color — stronger than the main sidebar's color-only
+  active state, kept consistent with this file's "color is never the sole state signal" rule);
+  section-grouped settings rows (uppercase muted group header, label-left/control-right rows, an optional
+  muted description line under a label); a connection-status card pattern (icon + name + address +
+  status, action buttons trailing, dismiss at the top-right corner) that becomes the direct model for our
+  own settings screen's Core-connection section. Also newly sampled and added as Components: a toggle
+  switch (on: `--accent` fill + white thumb; off: a dedicated "control-off" grey, `#3B3B3B` dark/
+  `#DBDBDB` light — always paired with a text label, never color-only) that becomes the model for
+  DESIGN.md's light/dark theme toggle; primary vs. secondary buttons (solid `--accent` pill vs. a muted
+  accent-tinted-grey pill, both filled — never a plain text link for a real action); and a text input
+  field (thin grey outline, large but not full corner radius). Closes the settings-screen gap
+  IMPL_UI_SHELL.md's Phase 0 flagged; only love/unlove/ban's placement and general hover/focus/disabled
+  states remain open there. No code changes.
+- Recolored `app/ui/AppWindow.slint`'s placeholder regions from arbitrary grays to DESIGN.md's actual
+  sampled dark-theme tokens (2026-09-08), per user feedback after seeing the Phase 1 screenshot ("the
+  colors are off") — cheap to do now that Phase 0 already produced real values, even though a proper
+  light/dark palette singleton (so the skeleton isn't hardcoded to one theme) is still Phase 2 work, not
+  pulled forward here. All four `cargo` gates re-verified green after the change.
+- Built the Slint/tokio integration bridge and an unstyled app shell skeleton (2026-09-08):
+  IMPL_UI_SHELL.md Phase 1, on `develop` (no feature branch — a small, single-phase change). Added
+  `app/ui/AppWindow.slint` (a root window with sidebar/content-area/now-playing-bar placeholder regions
+  and a `connectionStatus` property, unstyled — DESIGN.md's sampled tokens land starting Phase 2),
+  `app/build.rs` (`slint_build::compile`), and `app/src/core_bridge.rs`: a background OS thread builds its
+  own current-thread `tokio::runtime::Runtime`, calls `Connection::spawn`, and forwards each
+  `ConnectionEvent` to the UI thread via `slint::invoke_from_event_loop`. Confirmed empirically rather
+  than assumed: Slint's Rust codegen preserves a `.slint` property's exact camelCase spelling in its
+  generated accessor names (`set_connectionStatus`, not `set_connection_status`) — found via a `cargo
+  check` compile error, not guessed up front. Added `slint`/`tokio` to `app`'s dependencies and
+  `slint-build` as a build-dependency (all pinned to bare major versions, matching this repo's existing
+  dependency style rather than `cargo add`'s default exact-version pins). All four `cargo` gates green
+  (`cargo check`/`cargo test` — the existing 100 `core` tests, `app` has none yet/`clippy -- -D
+  warnings`/`fmt --check`). Ran the built binary directly against a real `DISPLAY`/`WAYLAND_DISPLAY`: no
+  panics over ~2.5 minutes, clean exit on SIGTERM; the user then confirmed the rendered window visually
+  (`Dissonanza_slint_example.png` in `~/Pictures/Screenshots`) — correct placeholder regions, and a live
+  "Connection: discovering" status proving the bridge actually carries a real `ConnectionState` from
+  `core` to the UI thread, not just that the process doesn't crash. Flagged, not resolved: the extension
+  identity `core_bridge::connection_config` declares to a Roon Core during pairing uses real values
+  already established elsewhere in this repo for `extension_id` (the Flatpak app-id) and `publisher` (the
+  git identity), but its `email` (an RFC 2606 `.invalid` placeholder) and `website` (a guessed GitHub URL)
+  are outright guesses the user should correct — shown to a real user in Roon's Settings > Extensions when
+  pairing. No shutdown-on-window-close wiring yet (`ConnectionHandle` is held alive but never told to
+  stop) — out of scope for this phase's stated deliverable, deferred to whichever future phase adds
+  window-close handling.
+- Sampled DESIGN.md's color tokens, typography, and layout/component detail from screenshots (2026-09-08):
+  IMPL_UI_SHELL.md's Phase 0, using 48 user-supplied screenshots of the real Roon desktop app (26 dark,
+  22 light, plus two named zone/output dialog captures) and ImageMagick pixel/histogram sampling (not
+  eyeballed, per DESIGN.md's own sourcing rule) at specific UI elements — sidebar nav text, list-row
+  text/icons, dropdown fills. Filled in: both themes' color tokens (`--bg`/`--surface`/`--accent`/
+  `--text-primary`/`--text-secondary`, plus a selected-row fill), each checked against WCAG 2.1 AA;
+  typography (a serif display face for every page title, sans-serif for everything else — exact
+  typeface names unconfirmed, flagged rather than guessed); the sidebar's confirmed three-section
+  structure (Browse/My Library/Playlists); a page-header pattern common to every library page sampled
+  (serif title, count subtitle, split "Play now" button, Focus/favorite-filter row); grid-tile and
+  list-row layout; most Components entries (love/unlove/ban's confirmed placement on list rows, an empty-
+  state pattern, dropdown/menu selected-row styling, the bottom transport bar); and an icon inventory,
+  explicitly separating the transport verbs already in scope (standby) from Core-internal DSP/grouping/
+  device-settings icons CLAUDE.md's mandatory technical choices permanently exclude from being wired to
+  anything. Key flagged finding, not resolved: Roon's own UI uses the accent color and the secondary-text
+  color as small link/metadata text in both themes at a contrast ratio that doesn't clear WCAG AA's
+  4.5:1 normal-text threshold (dark accent-as-text: 4.05:1; light secondary text: 3.23:1; light
+  accent-as-text: 3.44:1) — a real tension between this phase's pixel-parity priority and DESIGN.md's own
+  accessibility bar, left for a decision when the components that need it are actually built. Also
+  flagged, not resolved: no settings-screen screenshot exists at all; love/unlove/ban's on-screen home
+  outside list rows (transport bar, now-playing overlay) wasn't identified with confidence, and ban
+  wasn't observed anywhere in the sampled set; most hover/focus/disabled states weren't caught by the
+  static screenshots available. No code changes — this is IMPL_UI_SHELL.md Phase 0 only.
 - Archived the completed browse implementation plan (2026-09-07): moved `IMPL_BROWSE.md` to
   [docs/IMPL_BROWSE.md](docs/IMPL_BROWSE.md) now that both phases are done — same precedent as
   `IMPL_TRANSPORT.md`/`IMPL_CORE_CONNECTION.md`'s own archival. Never a tracked file, so this was a
