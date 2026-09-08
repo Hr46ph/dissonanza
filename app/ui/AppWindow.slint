@@ -1,10 +1,16 @@
-// Root window skeleton for IMPL_UI_SHELL.md Phase 1: proves the Slint/tokio bridge (see
-// src/core_bridge.rs) delivers live `ConnectionState` transitions to the UI thread. Regions are
-// still just flat rectangles (no real sidebar/list/transport-bar content yet — that's Phase 2+),
-// but colored with DESIGN.md's actual sampled dark-theme tokens rather than arbitrary placeholder
-// grays, since those values already exist. A proper light/dark global palette singleton (so this
-// isn't hardcoded to dark) is Phase 2 work, not repeated here for a skeleton with no theme toggle
-// yet.
+// Root window skeleton, extended through IMPL_UI_SHELL.md Phase 2. Phase 1 proved the Slint/tokio
+// bridge (see src/core_bridge.rs) delivers live `ConnectionState` transitions to the UI thread.
+// Phase 2 adds the zone list (`zones`/`selectedZoneId`) in the sidebar's spot — a temporary home;
+// real browse categories (Phase 4) and/or a transport-bar-triggered zone-switcher popover (a
+// possible Phase 3 follow-up) may eventually displace it, per IMPL_UI_SHELL.md's Phase 2 notes.
+// Regions are still otherwise flat rectangles colored with DESIGN.md's sampled dark-theme tokens —
+// a proper light/dark palette singleton is still open, not pulled forward here.
+struct ZoneInfo {
+    zoneId: string,
+    displayName: string,
+    state: string,
+}
+
 export component AppWindow inherits Window {
     title: "Dissonanza";
     preferred-width: 1024px;
@@ -12,6 +18,8 @@ export component AppWindow inherits Window {
     background: #161616; // DESIGN.md dark --bg
 
     in-out property <string> connectionStatus: "Not started";
+    in property <[ZoneInfo]> zones: [];
+    in-out property <string> selectedZoneId: "";
 
     HorizontalLayout {
         Rectangle {
@@ -20,11 +28,44 @@ export component AppWindow inherits Window {
 
             VerticalLayout {
                 padding: 12px;
+                spacing: 4px;
                 alignment: start;
 
                 Text {
-                    text: "Sidebar (placeholder)";
+                    text: "Zones";
                     color: #919191; // DESIGN.md dark --text-secondary
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+
+                for zone in root.zones: Rectangle {
+                    height: 44px;
+                    border-radius: 4px;
+                    background: zone.zoneId == root.selectedZoneId ? #3A3C68 : transparent; // DESIGN.md dark --accent-selected-bg
+
+                    TouchArea {
+                        clicked => {
+                            root.selectedZoneId = zone.zoneId;
+                        }
+                    }
+
+                    VerticalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        alignment: center;
+                        spacing: 2px;
+
+                        Text {
+                            text: zone.displayName;
+                            color: zone.zoneId == root.selectedZoneId ? #686CD5 : #ffffff; // DESIGN.md dark --accent / --text-primary
+                        }
+
+                        Text {
+                            text: zone.state;
+                            color: #919191; // DESIGN.md dark --text-secondary
+                            font-size: 11px;
+                        }
+                    }
                 }
             }
         }

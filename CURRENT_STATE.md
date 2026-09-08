@@ -73,14 +73,18 @@ dissonanza/
 ├── app/                  # `dissonanza` crate (binary) — Slint UI shell, depends on core's public API
 │   ├── build.rs              # compiles ui/AppWindow.slint via slint-build
 │   ├── ui/
-│   │   └── AppWindow.slint       # root window: sidebar/content-area/now-playing-bar placeholders,
-│   │                             #   a connectionStatus property — unstyled, DESIGN.md's tokens land
-│   │                             #   starting Phase 2 of IMPL_UI_SHELL.md
+│   │   └── AppWindow.slint       # root window: content-area/now-playing-bar placeholders, a
+│   │                             #   connectionStatus property, and (IMPL_UI_SHELL.md Phase 2) a
+│   │                             #   ZoneInfo struct + zones/selectedZoneId-driven zone list in the
+│   │                             #   sidebar's spot — still otherwise unstyled, most of DESIGN.md's
+│   │                             #   tokens land starting Phase 3+
 │   └── src/
 │       ├── main.rs           # AppWindow::new() -> core_bridge::spawn(weak) -> ui.run()
-│       └── core_bridge.rs    # Slint/tokio bridge (IMPL_UI_SHELL.md Phase 1): a background thread's
-│                              #   own tokio runtime drives Connection::spawn, forwards ConnectionEvent
-│                              #   to the UI thread via slint::invoke_from_event_loop
+│       └── core_bridge.rs    # Slint/tokio bridge: a background thread's own tokio runtime drives
+│                              #   Connection::spawn, forwards ConnectionEvent to the UI thread via
+│                              #   slint::invoke_from_event_loop (Phase 1); also subscribes to zones
+│                              #   on every Paired and forwards ZoneEvents into a Vec<ZoneInfo> model
+│                              #   (Phase 2, IMPL_UI_SHELL.md)
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml       # format/lint/test on every push/PR, version-bump guardrail on PRs into main
@@ -287,14 +291,27 @@ dissonanza/
   calls `Connection::spawn`, and forwards each `ConnectionEvent` to the UI thread via
   `slint::invoke_from_event_loop`, setting `AppWindow`'s `connectionStatus` property (Slint preserves a
   `.slint` property's exact camelCase spelling in its generated Rust accessor names — confirmed by
-  `cargo check`, not assumed — so the setter is `set_connectionStatus`, not `set_connection_status`).
-  `AppWindow.slint` itself stays pure view: three placeholder regions (sidebar/content-area/now-playing-
-  bar) and one label bound to `connectionStatus`, no `core` types or async logic reachable from `.slint`.
-  `ConnectionHandle`/`ConnectionRequests` are held alive for `core_bridge`'s whole lifetime but otherwise
-  unused this phase — no shutdown-on-window-close wiring yet, and no other module sends its own requests
-  yet. Extension identity (`connection_config()`) uses real values already established elsewhere in this
-  repo for `extension_id`/`publisher` (the Flatpak app-id, the git identity) but guesses `email`/`website`
-  — flagged in Open work below for the user to correct.
+  `cargo check`, not assumed — so the setter is `set_connectionStatus`, not `set_connection_status`, and
+  a `.slint` `struct`'s fields keep their exact spelling too, e.g. `ZoneInfo { zoneId, .. }`).
+  `ConnectionHandle`/`ConnectionRequests` are held alive for `core_bridge`'s whole lifetime — no
+  shutdown-on-window-close wiring yet. Extension identity (`connection_config()`) uses real values
+  already established elsewhere in this repo for `extension_id`/`publisher` (the Flatpak app-id, the git
+  identity) but guesses `email`/`website` — flagged in Open work below for the user to correct.
+  - **Phase 2 (done)** — `drive_connection`'s loop now `tokio::select!`s between the `ConnectionEvent`
+    receiver and an `Option<ZoneSubscription>` (via a `recv_zone_event` helper that awaits forever while
+    `None`, so `select!` doesn't need a separate arm shape for "no subscription yet"): on
+    `StateChanged(Paired)` it calls `transport::subscribe_zones`, and drops the subscription back to
+    `None` on any other state or once the stream ends (Core-ended or connection-lost, indistinguishable
+    per docs/protocol/transport.md — re-subscribing next `Paired` is automatic either way).
+    `apply_zone_event` (pure: `Subscribed` replaces the in-memory `Vec<Zone>` wholesale, `Changed` applies
+    added/changed/removed by `zone_id`, `zones_seek_changed` deliberately ignored until Phase 3's
+    transport bar needs it) and `to_zone_infos` (maps to the `.slint`-generated `ZoneInfo`) are unit-tested
+    directly — `app`'s first 4 unit tests, no live Core or Slint runtime involved, mirroring `core`'s own
+    pure-parser precedent. `AppWindow.slint` replaced the sidebar's placeholder text with a `zones`-driven
+    clickable list (`selectedZoneId` set by each row's `TouchArea`, highlighted with DESIGN.md's sampled
+    `--accent-selected-bg`) — a temporary home; Phase 4's real browse categories and/or a
+    transport-bar-triggered zone-switcher popover (once Phase 3 builds that bar) may displace it later,
+    not committed now.
 
 ## Open work
 
@@ -344,17 +361,19 @@ dissonanza/
   reconnect. Non-goals for this phase: `image:1`, Slint UI (see NORTH-STAR.md/IMPL_BROWSE.md's own
   non-goals), multi-zone/multi-Core (permanent, per NORTH-STAR.md).
 - Slint GUI: underway on `IMPL_UI_SHELL.md` (gitignored, not a tracked file, per the same `/IMPL_*.md`
-  precedent every prior phase used). Phase 0 (DESIGN.md sampling from screenshots) and Phase 1 (Slint/
-  tokio integration bridge + an unstyled window skeleton) are both done — see the `app` entry under
-  Modules above and DESIGN.md for the sampled tokens. Phases 2-5 (zone picker, now-playing/transport,
-  browse/grid/list, settings) are outlined only, pending these two landing. Phase 1's rendered window was
-  visually confirmed by the user (`Dissonanza_slint_example.png`): correct regions, live "Connection:
-  discovering" status. Per the user's follow-up feedback, the skeleton's placeholder regions were then
-  recolored from arbitrary grays to DESIGN.md's actual sampled dark-theme tokens (`--bg`/`--surface`/
-  `--text-primary`/`--text-secondary`) — cheap to do now that Phase 0 already produced real values, even
-  though a proper light/dark palette singleton is still Phase 2 work. Still open: no shutdown-on-window-
-  close handling yet, and `connection_config`'s `email`/`website` fields are guesses pending the user's
-  real contact details.
+  precedent every prior phase used). Phase 0 (DESIGN.md sampling from screenshots), Phase 1 (Slint/tokio
+  integration bridge + an unstyled window skeleton), and Phase 2 (zone picker + connection status) are
+  all done — see the `app` entry under Modules above and DESIGN.md for the sampled tokens. Phases 3-5
+  (now-playing/transport, browse/grid/list, settings) are outlined only, pending fine-grained steps.
+  Phase 1's rendered window was visually confirmed by the user (`Dissonanza_slint_example.png`): correct
+  regions, live "Connection: discovering" status. Per the user's follow-up feedback, the skeleton's
+  placeholder regions were then recolored from arbitrary grays to DESIGN.md's actual sampled dark-theme
+  tokens (`--bg`/`--surface`/`--text-primary`/`--text-secondary`) — cheap to do now that Phase 0 already
+  produced real values. Phase 2's zone list and selection highlighting haven't been visually confirmed by
+  the user yet (this session's environment has no computer-use screen access, same gap Phase 1 flagged) —
+  worth a follow-up screenshot against a real Core. Still open: a proper light/dark palette singleton, no
+  shutdown-on-window-close handling yet, and `connection_config`'s `email`/`website` fields are guesses
+  pending the user's real contact details.
 - Pairing-token persistence (so a paired extension doesn't have to re-pair on every restart) is
   deferred until a cache-store phase exists — the MOO handshake step will hold it in memory only.
 - Cache invalidation strategy for locally cached album art (when to refresh on a new Roon scan or changed art) undecided.
@@ -365,6 +384,26 @@ dissonanza/
 
 ## Recently changed
 
+- Built the zone picker and wired zone subscription into `core_bridge` (2026-09-08):
+  IMPL_UI_SHELL.md Phase 2, on `develop` (no feature branch, matching Phase 1's precedent). Confirmed
+  two design decisions with the user first (Gate 1 Clarify, mirroring Phase 1's own confirmation step):
+  extend `drive_connection`'s existing loop with `tokio::select!` over `ConnectionEvent`s and an
+  `Option<ZoneSubscription>` rather than a second dedicated task, and rebuild the whole Slint `zones`
+  model from a plain `Vec<Zone>` on every event rather than mutating a `VecModel` incrementally — both
+  the simpler option, confirmed adequate given this app's single-Core/single-subscription scope. Added
+  `ZoneInfo` (`.slint` struct) and `zones`/`selectedZoneId` properties to `AppWindow.slint`, replacing
+  the sidebar's placeholder text with a clickable zone list (selected row highlighted with DESIGN.md's
+  sampled `--accent-selected-bg`) — a temporary home, flagged as possibly displaced by Phase 4's real
+  browse categories or a Phase 3 transport-bar zone-switcher popover later. `core_bridge.rs` now calls
+  `transport::subscribe_zones` on every `StateChanged(Paired)`, applies `ZoneEvent`s to an in-memory
+  zone list via a new pure `apply_zone_event` function (unit-tested — `app`'s first 4 tests, no live
+  Core or Slint runtime needed), and pushes the mapped result to the UI thread the same
+  `slint::invoke_from_event_loop` way `connectionStatus` already does. `zones_seek_changed` is
+  deliberately ignored this phase (seek position isn't shown until Phase 3's transport bar). All four
+  `cargo` gates green (104 tests: 100 `core` + 4 new `app`, `clippy -- -D warnings`, `fmt --check`). Ran
+  the built binary against a real `DISPLAY`/`WAYLAND_DISPLAY` for 8s with no panics; no screenshot taken
+  (computer-use screen access still isn't granted in this environment) — visual confirmation of the zone
+  list against a real Core is left to the user, same gap Phase 1 flagged.
 - Sampled DESIGN.md's Settings-screen layout from 8 further screenshots (2026-09-08): captured
   deliberately for chrome/layout only, not content — Roon's own Settings controls Core-internal state
   (Audio Setup, DSP, etc.) that CLAUDE.md's mandatory technical choices permanently keep out of scope, so
