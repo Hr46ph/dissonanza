@@ -29,8 +29,7 @@ For those interrested, here are a few examples of classical and popular pieces t
 ## Status
 
 Early development, not yet usable. The Roon connection layer (SOOD discovery, MOO protocol) is
-in progress; the GUI hasn't started. See [CURRENT_STATE.md](CURRENT_STATE.md) for the current
-module map and open work.
+in progress; the GUI hasn't started yet.
 
 The project is experimental with the main purpose of learning the development process with Rust. It might never finish or even see a release.
 
