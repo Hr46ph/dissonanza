@@ -191,13 +191,18 @@ No further screenshot needed before Phase 5 — see Components below for the new
 - **Dropdown/menu** (zone picker, output menu) — a `--surface`-toned panel; a hovered/selected row gets
   `--accent-selected-bg` fill with primary-colored text/icon, not a border or underline. Sampled from the
   zone-switcher popup ("Xonar" zone + "Pause all") and the per-output settings menu (standby/DSP/group/
-  settings icons — see Icons below for which of these are actually in scope).
+  settings icons — see Icons below for which of these are actually in scope). **Confirmed placement**
+  (2026-09-08, user correction): Roon has no persistent/standing zone list anywhere in its UI — this
+  popup is the *only* place a zone list appears, opened by clicking the zone-name label in the bottom
+  transport bar's bottom-right corner (see Bottom transport bar below), next to the volume icon. Any
+  future implementation of a zone list must live there, not in the sidebar or as a separate screen.
 - **Bottom transport bar** — persistent, full-width, `--surface`-toned. Left: art thumbnail + track title
   (`--text-primary`, bold) + artist byline (`--text-secondary`) below it, or "Nothing playing" in
   `--text-secondary` when idle. Center: prev/play-pause/next icon buttons + a queue-list icon, then a
   seek bar (thin `--border`-toned track, `--accent`-filled played portion, circular thumb, flanked by
   elapsed/remaining time in `--text-secondary`) — the seek bar has no fill and controls render idle/dim
-  when nothing is playing. Right: output/speaker icon + zone name label, then a volume icon opening the
+  when nothing is playing. Right: output/speaker icon + zone name label (**clicking this label opens the
+  zone-switcher popup** described above under Dropdown/menu — confirmed 2026-09-08), then a volume icon opening the
   volume popover.
 - **Toggle switch** (sampled 2026-09-08 from Roon's own Settings screen — layout/chrome only, see
   Layout's Settings note) — a pill track with a circular thumb. On: `--accent` fill (`#686CD5` dark /

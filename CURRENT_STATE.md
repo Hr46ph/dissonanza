@@ -309,9 +309,12 @@ dissonanza/
     directly — `app`'s first 4 unit tests, no live Core or Slint runtime involved, mirroring `core`'s own
     pure-parser precedent. `AppWindow.slint` replaced the sidebar's placeholder text with a `zones`-driven
     clickable list (`selectedZoneId` set by each row's `TouchArea`, highlighted with DESIGN.md's sampled
-    `--accent-selected-bg`) — a temporary home; Phase 4's real browse categories and/or a
-    transport-bar-triggered zone-switcher popover (once Phase 3 builds that bar) may displace it later,
-    not committed now.
+    `--accent-selected-bg`) — a temporary home. **Confirmed by the user (2026-09-08)**: Roon has no
+    persistent zone list anywhere in its own UI — the real (and only) home for one is the
+    zone-switcher popup, opened from the zone-name label in the bottom transport bar's bottom-right
+    corner next to the volume icon (see DESIGN.md's Dropdown/menu and Bottom transport bar entries).
+    Decision: leave the sidebar placement as-is until Phase 3 builds that bar, then relocate the
+    presentation there — Phase 2's data/selection wiring carries over unchanged.
 
 ## Open work
 
