@@ -173,13 +173,15 @@ No further screenshot needed before Phase 5 — see Components below for the new
     in both themes) — outline-only (`--text-secondary`) when not loved, filled/stroked in `--accent` when
     loved. A circular outline heart button also appears in every page header as a "favorite items only"
     filter toggle (same glyph, different purpose — don't conflate the two visually).
-  - **Not yet located**: no heart/ban icon was visible in the bottom mini transport bar or the now-playing
-    overlay's top icon row in the sampled screenshots (that overlay's icon row — a tag/ribbon glyph,
-    person, album, lyrics, and others — wasn't captured at high enough resolution to identify each icon
-    with confidence). A ban control wasn't observed anywhere in this screenshot set at all — it likely
-    only surfaces on radio/station-type sources, none of which were captured. **Flagged, not resolved**:
-    where ban actually lives in Roon's UI needs a further screenshot (an internet-radio or Tidal-station
-    now-playing view) before this control can be built with confidence.
+  - **Love/ban placement resolved** (2026-09-08, `love_unlove_ban_menupopup.png`): the heart also appears
+    in the **expanded now-playing overlay's** top icon row (filled `--accent` when loved, same treatment
+    as the list-row heart) — not in the persistent bottom mini transport bar, which has no love/unlove/ban
+    presence at all (see Bottom transport bar below). Ban has **no standalone icon anywhere**: it's "Ban
+    this track", the last entry in that track's "•••" overflow/more-actions menu (opened from the same
+    overlay), alongside mostly out-of-scope items (add to tag, view lyrics, view TIDAL info, share, export,
+    edit) that reach beyond this app's scope. Practical effect: the bottom bar (IMPL_UI_SHELL.md Phase 3)
+    needs no love/unlove/ban treatment at all; the heart icon and the "Ban this track" menu item belong to
+    the expanded now-playing overlay, a still-unbuilt surface — see Open work in CURRENT_STATE.md.
 - **Grid tile** — square 1:1 art, zoom-responsive sizing (see Visual language), optional two-line
   title/artist caption below when the art itself doesn't already carry that text (see Layout).
 - **List row** — `~56px` art thumbnail + title (`--text-primary`) + accent-linked artist/album fields +
@@ -193,17 +195,26 @@ No further screenshot needed before Phase 5 — see Components below for the new
   zone-switcher popup ("Xonar" zone + "Pause all") and the per-output settings menu (standby/DSP/group/
   settings icons — see Icons below for which of these are actually in scope). **Confirmed placement**
   (2026-09-08, user correction): Roon has no persistent/standing zone list anywhere in its UI — this
-  popup is the *only* place a zone list appears, opened by clicking the zone-name label in the bottom
-  transport bar's bottom-right corner (see Bottom transport bar below), next to the volume icon. Any
-  future implementation of a zone list must live there, not in the sidebar or as a separate screen.
+  popup is the *only* place a zone list appears. Any future implementation of a zone list must live
+  here, not in the sidebar or as a separate screen. **Trigger confirmed 2026-09-08 (user correction)**:
+  opened by clicking the output-icon in the bottom transport bar's bottom-right corner, not the
+  zone-name label next to it — the icon is always present at a fixed size, unlike the name (blank
+  until a zone is selected). **Row content re-sampled with pixel precision 2026-09-08**
+  (`Screenshot_20260908_185248.png`): each zone row is icon + name + an inline pause/play button at the
+  row's trailing edge, all within the `--accent-selected-bg` highlight (measured `#434581`, matching the
+  already-sampled dark-theme token `#3A3C68` closely) when that zone is selected/active; a separate
+  "Pause all" row (icon + label, no selected-state styling — an action, not a selection) sits below the
+  zone list.
 - **Bottom transport bar** — persistent, full-width, `--surface`-toned. Left: art thumbnail + track title
   (`--text-primary`, bold) + artist byline (`--text-secondary`) below it, or "Nothing playing" in
-  `--text-secondary` when idle. Center: prev/play-pause/next icon buttons + a queue-list icon, then a
-  seek bar (thin `--border`-toned track, `--accent`-filled played portion, circular thumb, flanked by
-  elapsed/remaining time in `--text-secondary`) — the seek bar has no fill and controls render idle/dim
-  when nothing is playing. Right: output/speaker icon + zone name label (**clicking this label opens the
-  zone-switcher popup** described above under Dropdown/menu — confirmed 2026-09-08), then a volume icon opening the
-  volume popover.
+  `--text-secondary` when idle. Center: a signal-path indicator (see Icons), prev/play-pause/next icon
+  buttons + a play-queue icon, then a seek bar (`#606060` unfilled track — re-sampled 2026-09-08,
+  lighter than first assumed — `--accent`-filled played portion measured `#6A6ED9` ≈ the sampled
+  `--accent` token, circular thumb, flanked by elapsed/remaining time in `--text-secondary`) — controls
+  render idle/dim when nothing is playing. Right: the output-icon (**clicking it opens the
+  zone-switcher popup** described above under Dropdown/menu — trigger corrected 2026-09-08, see that
+  entry) with the selected zone's name centered *below* it (re-sampled 2026-09-08 — not beside it as
+  first assumed), then a volume icon opening the volume popover.
 - **Toggle switch** (sampled 2026-09-08 from Roon's own Settings screen — layout/chrome only, see
   Layout's Settings note) — a pill track with a circular thumb. On: `--accent` fill (`#686CD5` dark /
   `#8787F5` light, matching the accent already sampled elsewhere), white thumb, positioned right. Off: a
@@ -249,8 +260,49 @@ four-way-arrow (drag-to-reorder), heart outline/filled (love — see Components)
 button (favorite-filter toggle, visually identical glyph to the love icon but a different function —
 don't conflate).
 
-Transport bar: previous, play, pause, next, a queue/list-with-arrow icon, a speaker/output-box icon, a
-volume/speaker-with-waves icon.
+Transport bar — **re-sampled with pixel precision 2026-09-08** from `Screenshot_20260908_185235.png`
+(bar) and `Screenshot_20260908_185248.png` (zone-switcher popup), both `~/Pictures/Screenshots/`,
+superseding the earlier, lower-confidence description:
+- A **signal-path indicator** (a glowing white/blue four-point sparkle, left of "previous") — clicking
+  it opens a read-only signal-path panel (source format → DSP chain → output device, e.g. "TIDAL FLAC
+  44.1kHz" → "MQA Studio" → ... → "Xonar U7 MKII USB Audio"), confirmed via
+  `Screenshot_20260908_185311.png`. **Not "Roon Radio"/`auto_radio`** — an earlier note in this file
+  guessed that; corrected by the user directly. The panel's *contents* (bit depth conversion, volume
+  leveling, parametric/procedural EQ stages) are Core-internal DSP detail, permanently out of scope
+  per CLAUDE.md's mandatory technical choices — but the signal-path *display itself* (what format is
+  playing, through what chain, to what device) is read-only information, not a DSP control, so it may
+  be worth a future protocol study to see whether the official API exposes it at all: no source studied
+  so far (`sood-moo.md`/`transport.md`/`browse.md`) covers it, and none of `transport:2`'s modeled types
+  (`Zone`/`Output`/`NowPlaying`/`Volume`/`SourceControl`) carry format/bit-depth/sample-rate fields.
+  Logged as an open research question in CURRENT_STATE.md, not committed work.
+- previous / play / pause / next — simple filled glyphs (triangle+bar, triangle, two bars, mirrored
+  triangle+bar), confirming the shapes already hand-drawn for these are conceptually right. Color
+  re-sampled with pixel precision 2026-09-10: a consistent `#CCCCCC` across every transport-bar/
+  zone-popup/volume-popover icon glyph (prev/play-pause/next/queue/output/volume alike), not the
+  earlier vague "light-grey/white" guess split across `#919191`/`#ffffff`.
+- A **queue icon**: a small play-triangle followed by three horizontal lines — **corrected 2026-09-10**
+  (re-measured pixel-by-pixel against `Screenshot_20260908_185235.png` after a user-reported mismatch):
+  the top and bottom lines are the *same* length, and the **middle** line is the odd one out — shorter
+  and inset on both sides, not part of a monotonic size progression as the 2026-09-08 pass first read
+  it. The triangle itself is small enough (roughly as tall as the three lines combined) to genuinely
+  overlap their vertical span, which is why the icon reads as "triangle partly inside the lines" rather
+  than two cleanly-separated clusters — a "play queue" glyph, not a generic list/hamburger.
+- **Seek bar**: fill `#6A6ED9` (matches the already-sampled `--accent` `#686CD5` closely — no change
+  needed), but the **unfilled track is `#606060`**, a visibly lighter mid-grey — not the near-black
+  `#333333` first used, which read as barely visible against `--surface`. The thumb riding on it is a
+  distinct **white** circle, not accent-colored like the fill (confirmed 2026-09-10, same source).
+- **Output icon**: a proper bookshelf-speaker glyph — a rounded-rectangle outline with four small
+  corner dots (screws) and two concentric circles inside (tweeter above, woofer below) — not a plain
+  filled square. Shape re-checked and confirmed correct 2026-09-10; color is the same `#CCCCCC` as
+  every other transport-bar icon (see above).
+- **Volume icon**: a speaker-with-sound-waves glyph — shape still not sampled at high enough resolution
+  to draw with confidence (a placeholder approximation), but its color is confirmed `#CCCCCC` (2026-09-10,
+  same source), consistent with every other transport-bar icon.
+- The **zone-switcher popup** (Dropdown/menu, see Components) has more structure than previously
+  sampled: each zone row shows the output-speaker icon + zone name + an inline pause/play button at the
+  row's trailing edge (all inside the row's `--accent-selected-bg` highlight when selected), and a
+  separate **"Pause all"** row below the zone list (icon + label, no selected-state styling — it's an
+  action, not a selection).
 
 Output/zone menus: moon (standby — **in scope**, `transport::control::standby` already exists),
 waveform (DSP), shuffle-style double-arrow (zone grouping/transfer), gear (device settings) — the latter
@@ -258,9 +310,11 @@ three are **out of scope**: they reach into Core-internal Audio Setup/DSP/Zone c
 mandatory technical choices permanently exclude. Render them only if a future screen needs to visually
 match a menu that contains one, never wire them to anything.
 
-**Not yet confirmed**: the now-playing overlay's top-right icon row (tag/ribbon, person, album, lyrics,
-and others) wasn't resolved to specific functions at the sampled resolution — needs a closer screenshot
-before those icons can be drawn with confidence. Ban's icon is entirely unconfirmed (see Components).
+**Not yet confirmed**: the now-playing overlay's top icon row includes an unidentified glyph next to the
+heart (resembles a radio/broadcast icon) plus a "•••" more-actions menu and a grid-style icon, none
+resolved to specific functions at the sampled resolution — needs a closer screenshot before those icons
+can be drawn with confidence. Not blocking: none of them are in this app's scope today. Love/ban placement
+itself is now resolved, see Components.
 
 ## Integration with the Roon image API
 
