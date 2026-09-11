@@ -29,7 +29,7 @@ For those interrested, here are a few examples of classical and popular pieces t
 ## Status
 
 Early development, not yet usable. The Roon connection layer (SOOD discovery, MOO protocol) is
-in progress; the GUI hasn't started yet.
+in progress; the GUI has started but not functional.
 
 The project is experimental with the main purpose of learning the development process with Rust. It might never finish or even see a release.
 
@@ -44,6 +44,12 @@ Cargo workspace with two crates:
 
 ```sh
 cargo build
+```
+
+## Running from develop tree
+
+```sh
+cargo run -p dissonanza
 ```
 
 Requires a recent stable Rust toolchain (2024 edition).
