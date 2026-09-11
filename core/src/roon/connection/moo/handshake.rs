@@ -162,23 +162,7 @@ impl PairingState {
             }
             // No COMPLETE is sent here, matching node-roon-api: the reference implementation
             // never answers a `pair` request either, and Roon Cores don't wait on one.
-            "com.roonlabs.pairing:1/pair" => {
-                if self.paired {
-                    return Ok(None);
-                }
-                self.paired = true;
-                if let Some(subscriber) = self.subscriber {
-                    send_continue(
-                        outbound_tx,
-                        subscriber,
-                        "Changed",
-                        Some(paired_core_id_body(true, core_id)),
-                    )?;
-                }
-                Ok(Some(PairingEvent::Paired {
-                    core_id: core_id.to_string(),
-                }))
-            }
+            "com.roonlabs.pairing:1/pair" => self.mark_paired(outbound_tx, core_id),
             other => {
                 send_complete(
                     outbound_tx,
@@ -189,6 +173,36 @@ impl PairingState {
                 Ok(None)
             }
         }
+    }
+
+    /// Marks this connection paired with `core_id`, notifying any open `subscribe_pairing`
+    /// subscriber and returning the resulting [`PairingEvent`] — `Ok(None)` if already paired.
+    /// Shared by the inbound `pair` REQUEST arm above and by `connection/mod.rs`'s self-pairing
+    /// right after a successful `handshake::register`, mirroring `node-roon-api`'s
+    /// `found_core()`: pairing there is entirely self-declared the instant registration
+    /// completes, never gated on the Core sending its own `pair` REQUEST. A `pair` REQUEST
+    /// arriving anyway (e.g. a future multi-Core redirect) is handled by the same idempotency
+    /// check here, not a separate path.
+    pub(crate) fn mark_paired(
+        &mut self,
+        outbound_tx: &mpsc::UnboundedSender<MooMessage>,
+        core_id: &str,
+    ) -> Result<Option<PairingEvent>, HandshakeError> {
+        if self.paired {
+            return Ok(None);
+        }
+        self.paired = true;
+        if let Some(subscriber) = self.subscriber {
+            send_continue(
+                outbound_tx,
+                subscriber,
+                "Changed",
+                Some(paired_core_id_body(true, core_id)),
+            )?;
+        }
+        Ok(Some(PairingEvent::Paired {
+            core_id: core_id.to_string(),
+        }))
     }
 }
 
@@ -714,6 +728,38 @@ mod tests {
         assert!(
             outbound_rx.try_recv().is_err(),
             "no subscriber was ever registered, so nothing should have been sent"
+        );
+    }
+
+    #[test]
+    fn mark_paired_self_pairs_and_a_later_pair_request_is_then_a_no_op() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let mut state = PairingState::default();
+
+        let event = state.mark_paired(&outbound_tx, "core-1").expect("handled");
+        assert_eq!(
+            event,
+            Some(PairingEvent::Paired {
+                core_id: "core-1".to_string()
+            })
+        );
+        assert!(
+            outbound_rx.try_recv().is_err(),
+            "no subscriber was registered yet, so nothing should have been sent"
+        );
+
+        // A `pair` REQUEST arriving afterward (e.g. the Core sending one anyway) is a no-op —
+        // same idempotency check `mark_paired` and the `pair` REQUEST arm both go through.
+        let second = state
+            .handle_request(
+                &outbound_tx,
+                "core-1",
+                &pairing_request("com.roonlabs.pairing:1/pair", 1),
+            )
+            .expect("handled");
+        assert_eq!(
+            second, None,
+            "already self-paired, the pair request is a no-op"
         );
     }
 

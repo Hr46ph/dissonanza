@@ -226,6 +226,23 @@ async fn run_until_disconnected(
     let mut keepalive = Keepalive::new(KEEPALIVE_TIMEOUT, Instant::now());
     let mut keepalive_check = tokio::time::interval(KEEPALIVE_CHECK_INTERVAL);
 
+    // Self-pair immediately, mirroring node-roon-api's `found_core()`: pairing there is entirely
+    // self-declared once registration succeeds, never gated on the Core sending its own `pair`
+    // REQUEST. Confirmed by directly reading node-roon-api's `lib.js` (2026-09-11) after the
+    // user reported the reference app only ever showing Enable, never a separate Pair step. Not
+    // skipping any human approval: round 3's own finding that `Registered` doesn't arrive until
+    // after the human clicks Enable in Roon's UI means Enable has already happened by the time we
+    // get here. `pairing`'s own `pair` REQUEST handling (below, in the request loop) still exists
+    // for the Core to send one anyway — `mark_paired`'s idempotency check makes that a harmless
+    // no-op once we're already paired.
+    if let Some(PairingEvent::Paired { core_id }) =
+        pairing.mark_paired(&outbound_tx, &registered.core_id)?
+    {
+        paired = true;
+        keepalive.record_activity(Instant::now());
+        send_state(event_tx, ConnectionState::Paired { core_id });
+    }
+
     // Request-ids 1 and 2 are `handshake::register`'s own (already spent, above) — this loop's
     // allocator starts right after them. Scoped to this connection attempt only, like everything
     // else below, matching sood-moo.md: the requester picks a monotonically increasing
