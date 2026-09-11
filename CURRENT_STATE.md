@@ -333,7 +333,7 @@ dissonanza/
   implementation plan (`IMPL_CORE_CONNECTION.md`) — is complete as of the
   `feature/roon-connection-core` → `develop` merge (4.2) recorded below. A real test seam for
   `connection` remains a possible, undecided future improvement, not committed work. Also
-  open: pairing-token persistence, reconnect has no backoff yet (a disconnect that fails
+  open: reconnect has no backoff yet (a disconnect that fails
   immediately and repeatedly — e.g. interface enumeration erroring on every attempt — loops back
   to `Discovering` with no delay; not part of 3.3's scoped behavior, flagged here rather than
   silently added), and the discovery-keeps-running-as-a-fallback-while-paired question noted under
@@ -377,8 +377,11 @@ dissonanza/
   worth a follow-up screenshot against a real Core. Still open: a proper light/dark palette singleton, no
   shutdown-on-window-close handling yet, and `connection_config`'s `email`/`website` fields are guesses
   pending the user's real contact details.
-- Pairing-token persistence (so a paired extension doesn't have to re-pair on every restart) is
-  deferred until a cache-store phase exists — the MOO handshake step will hold it in memory only.
+- Pairing-token persistence across a full app restart is still deferred until a cache-store phase
+  exists. `run()` in [core/src/roon/connection/mod.rs](core/src/roon/connection/mod.rs) now holds
+  the token from the last successful `Registered` in memory and resends it on every subsequent
+  reconnect *within the same process* (2026-09-11, see Recently changed) — but that variable resets
+  to `None` on every process restart, so a fresh app launch still registers as unseen.
 - Cache invalidation strategy for locally cached album art (when to refresh on a new Roon scan or changed art) undecided.
 - DESIGN.md's color tokens, typography scale, and layout/component detail (including the settings screen and a toggle-switch/button/text-input set) are now sampled from screenshots (2026-09-08, see Recently changed). Still open: love/unlove/ban's exact on-screen placement outside list rows, and hover/focus/disabled states for most components.
 - Flatpak submission is blocked on making the repo public (currently private, see TECH_STACK.md) and on generating `cargo-sources.json` once real dependencies are locked in.
@@ -386,6 +389,78 @@ dissonanza/
 - `PKGBUILD` checksums are placeholders (`SKIP`) until a real `v0.1.0` tag exists.
 
 ## Recently changed
+
+- Self-pair immediately on successful registration, instead of waiting for an inbound `pair`
+  REQUEST (2026-09-11): the user asked why the reference `roon-web-controller` only ever needs
+  Enable, never a separate Pair click, even on a fully-revoked-authorization first run. Re-cloned
+  it and its `node-roon-api` SDK dependency and read `lib.js` directly rather than guessing:
+  `ev_registered()` calls `pairing_service_1.found_core(moo.core)` the instant `Registered`
+  arrives, self-declaring paired with no wait for the Core to send its own `pair` REQUEST at all —
+  contradicting CONTEXT.md's round 3 hypothesis that a missing saved token was the cause (that
+  hypothesis is now superseded by this finding, not confirmed). [`PairingState`](
+  core/src/roon/connection/moo/handshake.rs) gained `mark_paired` (`pub(crate)`), factored out of
+  the `pair` REQUEST arm's previous inline body — same idempotency check, notify-subscriber, and
+  event, callable directly. `connection::run_until_disconnected` now calls it right after
+  `handshake::register` succeeds, before entering the request loop, mirroring `found_core()`.
+  Timing is safe: round 3 already found `Registered` doesn't arrive until *after* the human clicks
+  Enable (the Core holds the response until then), so this isn't skipping any approval step. The
+  `pair` REQUEST arm stays in place, now routing through the same `mark_paired` — harmless and
+  idempotent if the Core sends one anyway, not dead code. One new test
+  (`mark_paired_self_pairs_and_a_later_pair_request_is_then_a_no_op`); all existing `PairingState`
+  tests unchanged. All four `cargo` gates green (108 tests: 4 `app` + 104 `core`, 1 new).
+  **Re-verified against a real Core the same day**: user rebuilt and tested — only Enable shows in
+  Roon's Extensions UI now, no separate Pair step, matching the reference app exactly. What
+  follows is the already-known, separate zone-subscription bug below, not a regression.
+- Re-applied CONTEXT.md's round-3 live-pairing fix, which turned out to have never actually
+  reached the committed code (2026-09-11): the user retested the token-persistence change below
+  against a real Core and saw the *original* pre-fix symptom (`connectionStatus` cycling
+  `discovering → registering → discovering`, no user input needed to trigger it) — not the
+  Enable/Pair click-count question the token change was meant to test. Checking `git log`/`git
+  reflog`/`git stash list`/other branches for `moo/handshake.rs`, `moo/transport.rs`, and
+  `mod.rs`'s keepalive gating found no trace of round 3's described fix (renaming `recv_complete`
+  to a ping-answering, `CONTINUE`-accepting `recv_response`), round 2's empty-binary-frame no-op,
+  or round 1's `paired`-gated keepalive staleness check anywhere — despite CONTEXT.md recording
+  all three as implemented, kept, and (round 3) confirmed working live. The code matched the
+  *original*, pre-investigation state exactly (`docs/protocol/sood-moo.md` still said `COMPLETE
+  Registered`, `recv_complete` still silently discarded inbound pings and only accepted
+  `COMPLETE`). Root cause of the mismatch not established — most likely these were made and
+  verified as uncommitted working-tree edits in an earlier session and lost before being committed
+  — but not chased further; per the user's explicit instruction, re-applied the fix rather than
+  re-investigating (CONTEXT.md's round 3 already fully specifies it and states it's
+  live-Core-confirmed). Changes: `moo::transport::run` now skips a zero-length binary WS frame
+  instead of erroring (`empty_binary_frame_is_ignored_as_a_keepalive` test);
+  `moo::handshake::recv_complete` renamed `recv_response`, gained an `accept_continue: bool` param
+  (`registry:1/register`'s wait now accepts `CONTINUE` as well as `COMPLETE`; `registry:1/info`
+  keeps requiring `COMPLETE` only) and now answers an inbound `com.roonlabs.ping:1/ping` inline via
+  `handle_ping_request` instead of discarding it (`accepts_a_continue_as_the_register_response`,
+  `answers_a_ping_request_that_arrives_before_registration_completes` tests); `run_until_disconnected`
+  in `connection/mod.rs` gates its keepalive-staleness check on a new `paired: bool`, set (and
+  `keepalive.record_activity`'d) only when `PairingEvent::Paired` actually fires. `docs/protocol/
+  sood-moo.md` corrected to document `CONTINUE Registered` (not `COMPLETE`), the ping-during-
+  handshake behavior, and the empty-binary-frame note. All four `cargo` gates green (107 tests: 4
+  `app` + 103 `core`, 3 new). **Re-verified against a real Core the same day**: user rebuilt and
+  tested — Enable then Pair now completes to a live connection (holding, not cycling), confirming
+  round 3's fix is genuinely back in the code this time. What follows pairing is the
+  already-known, separate zone-subscription bug documented below, not a regression from this fix.
+  Asked the user whether to now build real cross-restart token persistence (on disk) given a
+  relaunch still requires re-pairing (expected — the token-persistence change above is in-memory
+  only, by design); **declined for now**, stays in-memory-only.
+- Carried the pairing token forward across in-process reconnects (2026-09-11): to test
+  CONTEXT.md's leading hypothesis for why Dissonanza needs a separate Enable-then-Pair click where
+  the reference implementation only needs Enable. `run()` in
+  [core/src/roon/connection/mod.rs](core/src/roon/connection/mod.rs) now owns a `saved_token:
+  Option<String>` across its reconnect loop, passes it to `handshake::register` (which already
+  supported a `saved_token` parameter and already had test coverage for including it on the wire —
+  only the call site was hardcoding `None`) instead of always registering as unseen, and updates it
+  from each successful `Registered` response's `token` field. Scoped exactly to CURRENT_STATE.md's
+  existing deferral: in-memory only, never written to disk, so it survives a reconnect within the
+  same running process but not a full app restart — real cross-restart persistence still waits on a
+  cache-store phase. No new tests added: this is orchestration-loop wiring around already-tested
+  logic (`handshake::register`'s `saved_token` handling), matching this module's existing precedent
+  of only unit-testing pure helpers extracted from the async loop, not the loop's own plumbing. All
+  four `cargo` gates green (104 tests, unchanged count — no new tests). Not yet verified against a
+  real Core — that's the next step, per CONTEXT.md's stated test for confirming or killing the
+  hypothesis.
 
 - Built the zone picker and wired zone subscription into `core_bridge` (2026-09-08):
   IMPL_UI_SHELL.md Phase 2, on `develop` (no feature branch, matching Phase 1's precedent). Confirmed
