@@ -6,14 +6,15 @@ Keep entries short. This file describes *what is*, not *how it should be built* 
 
 ## File Structure
 
-Cargo workspace with two crates (`core/`, `app/`) plus the documentation/scaffolding from before:
+Cargo workspace with two crates (`core/`, `app/`) plus the documentation/scaffolding from before.
+`CONTEXT.md` also lives at the repo root but is intentionally **not** part of this tree or tracked
+by git (`.gitignore`'d, 2026-09-11) — it's per-session debugging memory, not a repo file:
 
 ```
 dissonanza/
 ├── Cargo.toml           # workspace root: members = ["core", "app"], shared version/edition
 ├── CLAUDE.md            # agent operating instructions
 ├── cliff.toml           # git-cliff config: generates CHANGELOG.md from Conventional Commits
-├── CONTEXT.md           # debugging memory, written only on explicit instruction
 ├── CONVENTIONS.md       # engineering conventions
 ├── COPY.md              # tone/voice/terminology
 ├── CURRENT_STATE.md     # this file
