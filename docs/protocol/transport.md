@@ -63,7 +63,7 @@ artist/album/track fields are exposed separately; a UI wanting those must use `b
 | `output_id` | string | |
 | `zone_id` | string | back-reference to the zone this output belongs to |
 | `display_name` | string | |
-| `state` | same enum as `Zone.state` | |
+| `state` | same enum as `Zone.state`, optional | JSDoc and this study both originally listed this as required, matching `Zone.state` — confirmed absent entirely on a live Core's output whose only `source_controls` entry was `"status": "indeterminate"` (2026-09-11), while the parent zone's own `state` was present in that same body |
 | `source_controls` | array, optional | see divergence note below — JSDoc formats this as a singular object but it is really a list |
 | `volume` | object, optional | present only for outputs that support volume control |
 

@@ -95,7 +95,12 @@ pub struct Output {
     pub output_id: String,
     pub zone_id: String,
     pub display_name: String,
-    pub state: ZoneState,
+    /// Optional despite the JSDoc and docs/protocol/transport.md's original study both listing it
+    /// as required (same as `Zone::state`) — confirmed missing entirely on a live Core's output
+    /// whose only `source_controls` entry was `"status": "indeterminate"` (2026-09-11), unlike
+    /// `Zone::state`, which was present in that same body.
+    #[serde(default)]
+    pub state: Option<ZoneState>,
     /// An array despite the JSDoc's singular formatting — see docs/protocol/transport.md's
     /// "Rust design notes" for why the array reading is the correct one.
     #[serde(default)]
@@ -249,6 +254,25 @@ mod tests {
         assert_eq!(zone.now_playing, None);
         assert_eq!(zone.seek_position, None);
         assert_eq!(zone.queue_items_remaining, None);
+    }
+
+    #[test]
+    fn output_state_is_optional() {
+        // The exact shape observed on a live Core (2026-09-11): an output whose only
+        // source_controls entry is "indeterminate" carries no `state` field at all, unlike its
+        // parent zone, which does.
+        let mut value = full_zone_json();
+        value["outputs"][0].as_object_mut().unwrap().remove("state");
+        value["outputs"][0]["source_controls"][0]["status"] = serde_json::json!("indeterminate");
+
+        let zone: Zone = serde_json::from_value(value).expect("parses without output.state");
+
+        assert_eq!(
+            zone.state,
+            ZoneState::Playing,
+            "the zone's own state is unaffected"
+        );
+        assert_eq!(zone.outputs[0].state, None);
     }
 
     #[test]
