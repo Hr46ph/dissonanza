@@ -17,6 +17,7 @@ target
 /.claude/
 /implementation-plan.md
 /IMPL_*.md
+/CONTEXT.md
 /docs/*
 # ...except protocol reference studies, which are durable engineering docs, not scratch notes
 !/docs/protocol/
