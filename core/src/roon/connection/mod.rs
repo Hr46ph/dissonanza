@@ -141,11 +141,21 @@ async fn run(
     mut shutdown_rx: watch::Receiver<bool>,
     requests_tx: watch::Sender<Option<CommandTx>>,
 ) {
+    // Carried across reconnects within this process only — held in memory here, never written to
+    // disk, per CURRENT_STATE.md's deferral of real pairing-token persistence to a future
+    // cache-store phase. Resets to `None` on every process restart.
+    let mut saved_token: Option<String> = None;
     loop {
         send_state(&event_tx, ConnectionState::Discovering);
 
-        if let Err(err) =
-            run_until_disconnected(&config, &event_tx, &mut shutdown_rx, &requests_tx).await
+        if let Err(err) = run_until_disconnected(
+            &config,
+            &event_tx,
+            &mut shutdown_rx,
+            &requests_tx,
+            &mut saved_token,
+        )
+        .await
         {
             let _ = event_tx.send(ConnectionEvent::Error(err));
         }
@@ -176,6 +186,7 @@ async fn run_until_disconnected(
     event_tx: &mpsc::UnboundedSender<ConnectionEvent>,
     shutdown_rx: &mut watch::Receiver<bool>,
     requests_tx: &watch::Sender<Option<CommandTx>>,
+    saved_token: &mut Option<String>,
 ) -> Result<(), ConnectionError> {
     let Some(core) = discover_first_core(shutdown_rx).await? else {
         return Ok(()); // shutdown requested before any Core was found
@@ -211,11 +222,14 @@ async fn run_until_disconnected(
             REQUIRED_SERVICES,
             OPTIONAL_SERVICES,
             PROVIDED_SERVICES,
-            None,
+            saved_token.as_deref(),
         ) => {
             result?
         }
     };
+    // Whatever token the Core just issued (whether this was a first-time registration or a
+    // renewal of one already sent above) is what the next reconnect attempt should present.
+    *saved_token = Some(registered.token.clone());
 
     let mut pairing = PairingState::default();
     // Gates the staleness check below: before the Core actually pairs, the human may take a
