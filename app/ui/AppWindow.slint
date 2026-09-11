@@ -1,14 +1,36 @@
-// Root window skeleton, extended through IMPL_UI_SHELL.md Phase 2. Phase 1 proved the Slint/tokio
+// Root window skeleton, extended through IMPL_UI_SHELL.md Phase 3.7.1. Phase 1 proved the Slint/tokio
 // bridge (see src/core_bridge.rs) delivers live `ConnectionState` transitions to the UI thread.
-// Phase 2 adds the zone list (`zones`/`selectedZoneId`) in the sidebar's spot — a temporary home;
-// real browse categories (Phase 4) and/or a transport-bar-triggered zone-switcher popover (a
-// possible Phase 3 follow-up) may eventually displace it, per IMPL_UI_SHELL.md's Phase 2 notes.
+// Phase 2 added the zone list/selection (`zones`/`selectedZoneId`) in the sidebar's spot — a
+// temporary home, per IMPL_UI_SHELL.md's Phase 2 notes. Phase 3.2 replaced the now-playing bar
+// placeholder with a real bottom transport bar, laid out per DESIGN.md's Bottom transport bar spec
+// and wired to send `controlRequested`/`seekRequested` — but its `nowPlaying*`/`seekPositionSeconds`/
+// `elapsedLabel`/`remainingLabel` properties aren't fed live data by `core_bridge` yet (that's Phase
+// 3.5), so the bar renders its idle state until then; only the buttons/seek-bar are functional today.
+// Phase 3.3 relocates Phase 2's zone list into a `PopupWindow` opened from the bar's zone-name label,
+// matching where Roon actually puts it (DESIGN.md's Dropdown/menu entry) — the sidebar reverts to a
+// plain placeholder; real browse categories (Phase 4) will eventually occupy it for real.
+// Phase 3.7.1 restructured the root layout so the bottom bar spans the *full* window width, including
+// under the sidebar, rather than being confined to the region right of it — pixel-sampled against a
+// real full-window Roon screenshot (see IMPL_UI_SHELL.md's Phase 3.7 notes), which also makes the art/
+// title's left inset line up with the sidebar's own left inset "for free" (both use the same 12px
+// padding, previously coincidental, now structurally aligned since the bar starts at the same x=0 the
+// sidebar does).
 // Regions are still otherwise flat rectangles colored with DESIGN.md's sampled dark-theme tokens —
 // a proper light/dark palette singleton is still open, not pulled forward here.
 struct ZoneInfo {
     zoneId: string,
     displayName: string,
     state: string,
+    // Phase 3.4 — the zone's first output (grouped zones only ever drive their first output's
+    // volume/mute, per IMPL_UI_SHELL.md Phase 3's design notes). `hasVolume` is false when the zone
+    // has no outputs, or its first output's `Volume` is absent/`incremental` (no min/max/value range
+    // to drive a slider with) — the volume popover renders nothing in that case.
+    outputId: string,
+    hasVolume: bool,
+    volumeMin: float,
+    volumeMax: float,
+    volumeValue: float,
+    isMuted: bool,
 }
 
 export component AppWindow inherits Window {
@@ -21,56 +43,49 @@ export component AppWindow inherits Window {
     in property <[ZoneInfo]> zones: [];
     in-out property <string> selectedZoneId: "";
 
-    HorizontalLayout {
-        Rectangle {
-            width: 220px;
-            background: #222222; // DESIGN.md dark --surface
+    // Phase 3.2 — now-playing bar state. Populated by `core_bridge` starting Phase 3.5; until then
+    // these stay at their idle defaults below.
+    in property <string> nowPlayingTitle: "";
+    in property <string> nowPlayingArtist: "";
+    in property <string> nowPlayingZoneState: "stopped";
+    in property <float> seekPositionSeconds: 0;
+    in property <float> lengthSeconds: 0;
+    in property <string> elapsedLabel: "0:00";
+    in property <string> remainingLabel: "0:00";
 
-            VerticalLayout {
-                padding: 12px;
-                spacing: 4px;
-                alignment: start;
+    // `zoneOrOutputId, action` — `action` is Roon's own wire vocabulary ("play"/"pause"/"playpause"/
+    // "previous"/"next"), mapped to `ControlAction` on the Rust side (`core_bridge::parse_control_action`).
+    callback controlRequested(string, string);
+    // `zoneOrOutputId, seconds` — an absolute seek target.
+    callback seekRequested(string, float);
+    // Zone-switcher popup's "Pause all" row.
+    callback pauseAllRequested();
+    // `outputId, value` — an absolute volume target within `[volumeMin, volumeMax]`. Volume popover
+    // (Phase 3.4).
+    callback volumeChangeRequested(string, float);
+    // `outputId, mute` — `true` to mute, `false` to unmute. Volume popover (Phase 3.4).
+    callback muteToggleRequested(string, bool);
 
-                Text {
-                    text: "Zones";
-                    color: #919191; // DESIGN.md dark --text-secondary
-                    font-size: 12px;
-                    font-weight: 600;
-                }
+    property <bool> isIdle: root.nowPlayingTitle == "";
+    property <float> playedFraction: root.lengthSeconds > 0 ? root.seekPositionSeconds / root.lengthSeconds : 0;
 
-                for zone in root.zones: Rectangle {
-                    height: 44px;
-                    border-radius: 4px;
-                    background: zone.zoneId == root.selectedZoneId ? #3A3C68 : transparent; // DESIGN.md dark --accent-selected-bg
+    VerticalLayout {
+        HorizontalLayout {
+            Rectangle {
+                width: 220px;
+                background: #222222; // DESIGN.md dark --surface
 
-                    TouchArea {
-                        clicked => {
-                            root.selectedZoneId = zone.zoneId;
-                        }
-                    }
+                VerticalLayout {
+                    padding: 12px;
+                    alignment: start;
 
-                    VerticalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        alignment: center;
-                        spacing: 2px;
-
-                        Text {
-                            text: zone.displayName;
-                            color: zone.zoneId == root.selectedZoneId ? #686CD5 : #ffffff; // DESIGN.md dark --accent / --text-primary
-                        }
-
-                        Text {
-                            text: zone.state;
-                            color: #919191; // DESIGN.md dark --text-secondary
-                            font-size: 11px;
-                        }
+                    Text {
+                        text: "Sidebar (placeholder)";
+                        color: #919191; // DESIGN.md dark --text-secondary
                     }
                 }
             }
-        }
 
-        VerticalLayout {
             Rectangle {
                 background: #161616; // DESIGN.md dark --bg
 
@@ -91,18 +106,655 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
 
-            Rectangle {
-                height: 96px;
-                background: #222222; // DESIGN.md dark --surface
+        // Divider (Phase 3.7.2) — 1px, pixel-sampled from the real seam between the bottom bar and
+        // everything above it (`Screenshot_20260908_160535.png`): a distinct, visibly-lighter grey,
+        // not the near-invisible `--border` hairline token (rgba(255,255,255,0.06)). One line, full
+        // width, separates the bar from both the sidebar and content area at once, matching the
+        // source. No separate line between the sidebar and content area themselves — sampled at
+        // several points and confirmed real Roon draws none there, relying on the --surface/--bg
+        // contrast alone (matches DESIGN.md's existing "surfaces read as raised" rationale) — flagged
+        // to the user rather than added by default, per IMPL_UI_SHELL.md's Phase 3.7 notes.
+        Rectangle {
+            height: 1px;
+            background: #4D4D51;
+        }
 
-                VerticalLayout {
-                    padding: 12px;
+        // Bottom transport bar — spans the full window width (Phase 3.7.1), including under the
+        // sidebar above it, matching real Roon rather than being confined to the content column.
+        Rectangle {
+            height: 88px;
+            background: #222222; // DESIGN.md dark --surface
+
+            HorizontalLayout {
+                padding: 12px;
+                spacing: 20px;
+
+                // Left: art placeholder + title/artist (or idle state)
+                HorizontalLayout {
                     alignment: start;
+                    spacing: 12px;
 
-                    Text {
-                        text: "Now-playing bar (placeholder)";
-                        color: #919191; // DESIGN.md dark --text-secondary
+                    Rectangle {
+                        width: 64px;
+                        height: 64px;
+                        border-radius: 4px;
+                        background: #161616; // DESIGN.md dark --bg — real art needs image:1
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+
+                        Text {
+                            text: root.isIdle ? "Nothing playing" : root.nowPlayingTitle;
+                            color: root.isIdle ? #919191 : #ffffff; // --text-secondary / --text-primary
+                            font-weight: 700;
+                        }
+
+                        Text {
+                            text: root.nowPlayingArtist;
+                            color: #919191; // DESIGN.md dark --text-secondary
+                            font-size: 12px;
+                            visible: !root.isIdle;
+                        }
+                    }
+                }
+
+                // Center: prev / play-pause / next / queue, then the seek bar
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 6px;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 20px;
+
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+
+                            TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                clicked => {
+                                    root.controlRequested(root.selectedZoneId, "previous");
+                                }
+                            }
+
+                            Path {
+                                width: 16px;
+                                height: 16px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                fill: root.isIdle ? #555555 : #CCCCCC; // pixel-sampled 2026-09-10 (Screenshot_20260908_185235.png)
+                                commands: "M 13 2 L 13 14 L 6 8 Z M 3 2 L 5 2 L 5 14 L 3 14 Z";
+                            }
+                        }
+
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+
+                            TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                clicked => {
+                                    root.controlRequested(root.selectedZoneId, "playpause");
+                                }
+                            }
+
+                            Path {
+                                visible: root.nowPlayingZoneState != "playing";
+                                width: 18px;
+                                height: 18px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                fill: root.isIdle ? #555555 : #CCCCCC; // pixel-sampled 2026-09-10 (Screenshot_20260908_185235.png)
+                                commands: "M 3 2 L 3 16 L 15 9 Z";
+                            }
+
+                            Rectangle {
+                                visible: root.nowPlayingZoneState == "playing";
+                                x: parent.width / 2 - 7px;
+                                y: (parent.height - 16px) / 2;
+                                width: 5px;
+                                height: 16px;
+                                background: #CCCCCC; // pixel-sampled 2026-09-10 (Screenshot_20260908_185235.png)
+                            }
+
+                            Rectangle {
+                                visible: root.nowPlayingZoneState == "playing";
+                                x: parent.width / 2 + 2px;
+                                y: (parent.height - 16px) / 2;
+                                width: 5px;
+                                height: 16px;
+                                background: #CCCCCC; // pixel-sampled 2026-09-10 (Screenshot_20260908_185235.png)
+                            }
+                        }
+
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+
+                            TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                clicked => {
+                                    root.controlRequested(root.selectedZoneId, "next");
+                                }
+                            }
+
+                            Path {
+                                width: 16px;
+                                height: 16px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                fill: root.isIdle ? #555555 : #CCCCCC; // pixel-sampled 2026-09-10 (Screenshot_20260908_185235.png)
+                                commands: "M 3 2 L 3 14 L 10 8 Z M 11 2 L 13 2 L 13 14 L 11 14 Z";
+                            }
+                        }
+
+                        // Queue icon — a play-triangle + three lines, re-measured pixel-by-pixel
+                        // 2026-09-10 (Phase 3.7.3 follow-up, `Screenshot_20260908_185235.png`),
+                        // correcting the 2026-09-08 pass: the top/bottom lines are the *same* length
+                        // (x:680-692 at both y=43-44 and y=53-54 in the source, not "increasing"), and
+                        // the middle line is the odd one out — shorter and inset on both sides
+                        // (x:684-691), sitting inside the triangle's own vertical span rather than
+                        // continuing a size progression. The triangle itself is smaller than first
+                        // drawn (7x8, not 7x10) and close enough to genuinely overlap the lines'
+                        // combined vertical range — this is why the real icon reads as "triangle
+                        // partly inside the lines," not two separate clusters with a clean gap.
+                        Rectangle {
+                            width: 18px;
+                            height: 12px;
+
+                            Path {
+                                width: 7px;
+                                height: 8px;
+                                x: 0px;
+                                y: 2px;
+                                fill: #CCCCCC;
+                                commands: "M 0 0 L 7 4 L 0 8 Z";
+                            }
+
+                            Rectangle {
+                                x: 5px;
+                                y: 0px;
+                                width: 12px;
+                                height: 2px;
+                                background: #CCCCCC;
+                            }
+
+                            Rectangle {
+                                x: 9px;
+                                y: 5px;
+                                width: 8px;
+                                height: 2px;
+                                background: #CCCCCC;
+                            }
+
+                            Rectangle {
+                                x: 5px;
+                                y: 10px;
+                                width: 12px;
+                                height: 2px;
+                                background: #CCCCCC;
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 8px;
+
+                        Text {
+                            text: root.elapsedLabel;
+                            color: #919191; // DESIGN.md dark --text-secondary
+                            font-size: 11px;
+                        }
+
+                        Rectangle {
+                            width: 320px;
+                            height: 4px;
+                            border-radius: 2px;
+                            background: #606060; // re-sampled 2026-09-08 (Screenshot_20260908_185235.png)
+
+                            Rectangle {
+                                width: parent.width * root.playedFraction;
+                                height: parent.height;
+                                border-radius: 2px;
+                                background: #686CD5; // DESIGN.md dark --accent
+                            }
+
+                            Rectangle {
+                                x: parent.width * root.playedFraction - self.width / 2;
+                                y: (parent.height - self.height) / 2;
+                                width: 10px;
+                                height: 10px;
+                                border-radius: 5px;
+                                background: #686CD5; // DESIGN.md dark --accent
+                            }
+
+                            TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                clicked => {
+                                    if (root.lengthSeconds > 0) {
+                                        root.seekRequested(root.selectedZoneId, (self.mouse-x / self.width) * root.lengthSeconds);
+                                    }
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: root.remainingLabel;
+                            color: #919191; // DESIGN.md dark --text-secondary
+                            font-size: 11px;
+                        }
+                    }
+                }
+
+                // Right: output icon + zone name (click opens the zone-switcher popup below) +
+                // volume icon (Phase 3.4 makes this open the volume popover)
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 12px;
+
+                    // Output icon + zone name, name stacked *below* the icon (not beside it) —
+                    // corrected 2026-09-08 against the user's own screenshots of the real Roon
+                    // transport bar, which show exactly this layout. Click opens the
+                    // zone-switcher popup (Phase 3.3); the icon is the trigger, not the name text
+                    // (empty until something's selected, so it can't be relied on for a hit
+                    // target — see the min-width bug this replaced, noted above).
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+
+                        Rectangle {
+                            // Bookshelf-speaker glyph (rounded-rect outline + 4 corner dots +
+                            // tweeter/woofer circles), re-sampled with pixel precision 2026-09-08
+                            // — see DESIGN.md's Icons section. Replaces the earlier plain filled
+                            // square. Color re-sampled 2026-09-10 (Screenshot_20260908_185235.png).
+                            width: 20px;
+                            height: 20px;
+
+                            Rectangle {
+                                x: 3px;
+                                y: 0px;
+                                width: 14px;
+                                height: 20px;
+                                border-radius: 2px;
+                                border-width: 1px;
+                                border-color: #CCCCCC;
+                                background: transparent;
+                            }
+
+                            Rectangle {
+                                x: 4px;
+                                y: 2px;
+                                width: 2px;
+                                height: 2px;
+                                border-radius: 1px;
+                                background: #CCCCCC;
+                            }
+
+                            Rectangle {
+                                x: 14px;
+                                y: 2px;
+                                width: 2px;
+                                height: 2px;
+                                border-radius: 1px;
+                                background: #CCCCCC;
+                            }
+
+                            Rectangle {
+                                x: 4px;
+                                y: 16px;
+                                width: 2px;
+                                height: 2px;
+                                border-radius: 1px;
+                                background: #CCCCCC;
+                            }
+
+                            Rectangle {
+                                x: 14px;
+                                y: 16px;
+                                width: 2px;
+                                height: 2px;
+                                border-radius: 1px;
+                                background: #CCCCCC;
+                            }
+
+                            Rectangle {
+                                // tweeter
+                                x: 7px;
+                                y: 4px;
+                                width: 6px;
+                                height: 6px;
+                                border-radius: 3px;
+                                border-width: 1px;
+                                border-color: #CCCCCC;
+                                background: transparent;
+                            }
+
+                            Rectangle {
+                                // woofer
+                                x: 6px;
+                                y: 11px;
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                border-width: 1px;
+                                border-color: #CCCCCC;
+                                background: transparent;
+                            }
+
+                            TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                clicked => {
+                                    zoneSwitcherPopup.show();
+                                }
+                            }
+
+                            // Zone-switcher popup (Phase 3.3) — the only place a zone list appears
+                            // in Roon's own UI, per DESIGN.md's Dropdown/menu entry. Reuses Phase
+                            // 2's `zones`/`selectedZoneId` model unchanged; this is a pure
+                            // presentation move, not new data plumbing.
+                            zoneSwitcherPopup := PopupWindow {
+                                x: parent.width - self.width;
+                                y: -8px - self.height;
+                                width: 220px;
+
+                                Rectangle {
+                                    width: 100%;
+                                    height: 100%;
+                                    background: #222222; // DESIGN.md dark --surface
+                                    border-radius: 4px;
+
+                                    VerticalLayout {
+                                        padding: 8px;
+                                        spacing: 4px;
+
+                                        for zone in root.zones: Rectangle {
+                                            height: 44px;
+                                            border-radius: 4px;
+                                            background: zone.zoneId == root.selectedZoneId ? #3A3C68 : transparent; // DESIGN.md dark --accent-selected-bg
+
+                                            TouchArea {
+                                                width: 100%;
+                                                height: 100%;
+                                                clicked => {
+                                                    root.selectedZoneId = zone.zoneId;
+                                                    zoneSwitcherPopup.close();
+                                                }
+                                            }
+
+                                            VerticalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 36px; // leave room for the inline play/pause button
+                                                alignment: center;
+                                                spacing: 2px;
+
+                                                Text {
+                                                    text: zone.displayName;
+                                                    color: zone.zoneId == root.selectedZoneId ? #686CD5 : #ffffff; // DESIGN.md dark --accent / --text-primary
+                                                }
+
+                                                Text {
+                                                    text: zone.state;
+                                                    color: #919191; // DESIGN.md dark --text-secondary
+                                                    font-size: 11px;
+                                                }
+                                            }
+
+                                            // Inline play/pause button, re-sampled with pixel
+                                            // precision 2026-09-08 — declared after the row's own
+                                            // TouchArea so it takes click priority over it in this
+                                            // smaller region, matching Roon's own popup.
+                                            Rectangle {
+                                                x: parent.width - 32px;
+                                                y: (parent.height - 24px) / 2;
+                                                width: 24px;
+                                                height: 24px;
+
+                                                TouchArea {
+                                                    width: 100%;
+                                                    height: 100%;
+                                                    clicked => {
+                                                        root.controlRequested(zone.zoneId, "playpause");
+                                                    }
+                                                }
+
+                                                Path {
+                                                    visible: zone.state != "playing";
+                                                    width: 10px;
+                                                    height: 10px;
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                    fill: #ffffff;
+                                                    commands: "M 1 1 L 1 9 L 9 5 Z";
+                                                }
+
+                                                Rectangle {
+                                                    visible: zone.state == "playing";
+                                                    x: parent.width / 2 - 4px;
+                                                    y: (parent.height - 10px) / 2;
+                                                    width: 3px;
+                                                    height: 10px;
+                                                    background: #ffffff;
+                                                }
+
+                                                Rectangle {
+                                                    visible: zone.state == "playing";
+                                                    x: parent.width / 2 + 1px;
+                                                    y: (parent.height - 10px) / 2;
+                                                    width: 3px;
+                                                    height: 10px;
+                                                    background: #ffffff;
+                                                }
+                                            }
+                                        }
+
+                                        // "Pause all" row, re-sampled with pixel precision
+                                        // 2026-09-08 — an action, not a selection, so it never
+                                        // takes the `--accent-selected-bg` highlight.
+                                        Rectangle {
+                                            height: 36px;
+                                            border-radius: 4px;
+
+                                            TouchArea {
+                                                width: 100%;
+                                                height: 100%;
+                                                clicked => {
+                                                    root.pauseAllRequested();
+                                                }
+                                            }
+
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                spacing: 8px;
+                                                alignment: start;
+
+                                                Rectangle {
+                                                    width: 14px;
+                                                    height: 14px;
+
+                                                    Rectangle {
+                                                        x: 2px;
+                                                        y: 0px;
+                                                        width: 4px;
+                                                        height: 14px;
+                                                        background: #919191; // DESIGN.md dark --text-secondary
+                                                    }
+
+                                                    Rectangle {
+                                                        x: 8px;
+                                                        y: 0px;
+                                                        width: 4px;
+                                                        height: 14px;
+                                                        background: #919191;
+                                                    }
+                                                }
+
+                                                Text {
+                                                    text: "Pause all";
+                                                    color: #919191; // DESIGN.md dark --text-secondary
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Renders nothing when no zone is selected — the icon above is the
+                        // actual hit target either way.
+                        for zone in root.zones: Rectangle {
+                            if zone.zoneId == root.selectedZoneId: Text {
+                                text: zone.displayName;
+                                color: #919191; // DESIGN.md dark --text-secondary
+                                font-size: 11px;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        // Speaker-with-waves glyph — the *shape* is still a generic approximation,
+                        // not pixel-sampled (DESIGN.md flags it as unconfirmed at the sampled
+                        // screenshots' resolution); its *color* was re-sampled 2026-09-10 (Phase
+                        // 3.7.3, `Screenshot_20260908_185235.png`). Opens the volume popover (Phase
+                        // 3.4).
+                        width: 20px;
+                        height: 20px;
+
+                        Path {
+                            width: 8px;
+                            height: 12px;
+                            x: 0px;
+                            y: (parent.height - self.height) / 2;
+                            fill: #CCCCCC; // pixel-sampled 2026-09-10 (Screenshot_20260908_185235.png)
+                            commands: "M 0 4 L 3 4 L 7 0 L 7 12 L 3 8 L 0 8 Z";
+                        }
+
+                        Path {
+                            width: 4px;
+                            height: 6px;
+                            x: 10px;
+                            y: (parent.height - self.height) / 2;
+                            stroke: #CCCCCC;
+                            stroke-width: 1.2px;
+                            commands: "M 0 0 L 4 3 L 0 6";
+                        }
+
+                        Path {
+                            width: 6px;
+                            height: 10px;
+                            x: 13px;
+                            y: (parent.height - self.height) / 2;
+                            stroke: #CCCCCC;
+                            stroke-width: 1.2px;
+                            commands: "M 0 0 L 6 5 L 0 10";
+                        }
+
+                        TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            clicked => {
+                                volumePopover.show();
+                            }
+                        }
+
+                        // Volume popover (Phase 3.4) — no sampled screenshot exists for this
+                        // surface (DESIGN.md never captured one), so its layout/slider style is an
+                        // implementation-level call, not a pixel match: mirrors this file's own
+                        // seek-bar slider and the zone-switcher popup's "Pause all" row styling
+                        // for visual consistency with the rest of the bar. Renders nothing when no
+                        // zone is selected or the selected zone's first output has no volume range
+                        // — same "renders nothing" precedent the zone-name label below the output
+                        // icon already established.
+                        volumePopover := PopupWindow {
+                            x: parent.width - self.width;
+                            y: -8px - self.height;
+                            width: 180px;
+
+                            Rectangle {
+                                width: 100%;
+                                height: 100%;
+                                background: #222222; // DESIGN.md dark --surface
+                                border-radius: 4px;
+
+                                for zone in root.zones: VerticalLayout {
+                                    if zone.zoneId == root.selectedZoneId && zone.hasVolume: VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 10px;
+
+                                        Text {
+                                            text: "Volume";
+                                            color: #ffffff; // DESIGN.md dark --text-primary
+                                            font-size: 12px;
+                                        }
+
+                                        Rectangle {
+                                            height: 4px;
+                                            border-radius: 2px;
+                                            background: #606060; // matches the seek bar's unfilled track
+
+                                            property <float> fraction: zone.volumeMax > zone.volumeMin
+                                                ? (zone.volumeValue - zone.volumeMin) / (zone.volumeMax - zone.volumeMin)
+                                                : 0;
+
+                                            Rectangle {
+                                                width: parent.width * parent.fraction;
+                                                height: parent.height;
+                                                border-radius: 2px;
+                                                background: #686CD5; // DESIGN.md dark --accent
+                                            }
+
+                                            Rectangle {
+                                                x: parent.width * parent.fraction - self.width / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                width: 10px;
+                                                height: 10px;
+                                                border-radius: 5px;
+                                                background: #686CD5; // DESIGN.md dark --accent
+                                            }
+
+                                            TouchArea {
+                                                width: 100%;
+                                                height: 100%;
+                                                clicked => {
+                                                    root.volumeChangeRequested(zone.outputId, zone.volumeMin + (self.mouse-x / self.width) * (zone.volumeMax - zone.volumeMin));
+                                                }
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            height: 28px;
+                                            border-radius: 4px;
+
+                                            TouchArea {
+                                                width: 100%;
+                                                height: 100%;
+                                                clicked => {
+                                                    root.muteToggleRequested(zone.outputId, !zone.isMuted);
+                                                }
+                                            }
+
+                                            Text {
+                                                text: zone.isMuted ? "Unmute" : "Mute";
+                                                color: #919191; // DESIGN.md dark --text-secondary
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
