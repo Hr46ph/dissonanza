@@ -76,18 +76,25 @@ dissonanza/
 ├── app/                  # `dissonanza` crate (binary) — Slint UI shell, depends on core's public API
 │   ├── build.rs              # compiles ui/AppWindow.slint via slint-build
 │   ├── ui/
-│   │   └── AppWindow.slint       # root window: content-area/now-playing-bar placeholders, a
-│   │                             #   connectionStatus property, and (IMPL_UI_SHELL.md Phase 2) a
-│   │                             #   ZoneInfo struct + zones/selectedZoneId-driven zone list in the
-│   │                             #   sidebar's spot — still otherwise unstyled, most of DESIGN.md's
-│   │                             #   tokens land starting Phase 3+
+│   │   └── AppWindow.slint       # root window: sidebar (zone list, Phase 2, temporary — moves into the
+│   │                             #   zone-switcher popup's trigger area at Phase 4) + content-area
+│   │                             #   placeholder + a full-width bottom transport bar (IMPL_UI_SHELL.md
+│   │                             #   Phase 3.1-3.4, 3.7.1-3.7.3): prev/play-pause/next/queue controls,
+│   │                             #   a click-to-seek bar, a zone-switcher popup and a volume/mute
+│   │                             #   popover off the output icon, pixel-sampled colors/icon shapes per
+│   │                             #   DESIGN.md. Phase 3.5 (live now-playing/seek data) and 3.7.4-3.7.6
+│   │                             #   (icon-size/thumb/popup-width polish) not started.
 │   └── src/
-│       ├── main.rs           # AppWindow::new() -> core_bridge::spawn(weak) -> ui.run()
+│       ├── main.rs           # AppWindow::new() -> core_bridge::spawn(weak) -> wires controlRequested/
+│       │                     #   seekRequested/pauseAllRequested/volumeChangeRequested/
+│       │                     #   muteToggleRequested callbacks to BridgeCommand -> ui.run()
 │       └── core_bridge.rs    # Slint/tokio bridge: a background thread's own tokio runtime drives
 │                              #   Connection::spawn, forwards ConnectionEvent to the UI thread via
-│                              #   slint::invoke_from_event_loop (Phase 1); also subscribes to zones
-│                              #   on every Paired and forwards ZoneEvents into a Vec<ZoneInfo> model
-│                              #   (Phase 2, IMPL_UI_SHELL.md)
+│                              #   slint::invoke_from_event_loop (Phase 1); subscribes to zones on every
+│                              #   Paired and forwards ZoneEvents into a Vec<ZoneInfo> model (Phase 2);
+│                              #   and receives BridgeCommand over an mpsc channel, dispatching to
+│                              #   core::roon::transport's control/seek/change_volume/mute verbs
+│                              #   (Phase 3.1)
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml       # format/lint/test on every push/PR, version-bump guardrail on PRs into main
@@ -382,8 +389,32 @@ dissonanza/
 - Slint GUI: underway on `IMPL_UI_SHELL.md` (gitignored, not a tracked file, per the same `/IMPL_*.md`
   precedent every prior phase used). Phase 0 (DESIGN.md sampling from screenshots), Phase 1 (Slint/tokio
   integration bridge + an unstyled window skeleton), and Phase 2 (zone picker + connection status) are
-  all done — see the `app` entry under Modules above and DESIGN.md for the sampled tokens. Phases 3-5
-  (now-playing/transport, browse/grid/list, settings) are outlined only, pending fine-grained steps.
+  all done — see the `app` entry under Modules above and DESIGN.md for the sampled tokens. Phase 3
+  (now-playing/transport bar) is in progress: 3.1 (`BridgeCommand` UI→core command channel), 3.2 (the
+  real bottom transport bar), 3.3 (the zone-switcher popup, both visually confirmed), and 3.4 (the
+  volume popover, not visually confirmed — computer-use access was denied this session) are done,
+  3.5-3.6 are not started — see the Recently changed entries below. Phases 4-5 (browse/grid/list,
+  settings) are still outlined only, pending fine-grained steps.
+  **Phase 3.7 (pixel-sampled layout/icon corrections, user-reported after 3.4) is also in progress**:
+  3.7.1 (full-width bottom bar), 3.7.2 (divider line), and 3.7.3 (icon color + a queue-icon shape
+  correction) are done and user-confirmed; 3.7.4-3.7.6 (play/pause icon size, slider thumbs,
+  zone-switcher popup width/position) are not started — steps are being confirmed one at a time with
+  the user before each is implemented, per their explicit request. See IMPL_UI_SHELL.md's Phase 3.7 for
+  the full step list and CURRENT_STATE.md's Recently-changed entries for what's landed so far. The
+  live-Core connection issue that paused this work on 2026-09-10 is now fixed (see the pairing/
+  self-pair/token-persistence/`Output::state` entries above, all confirmed against a real Core) — 3.7.4
+  is the next step whenever the user resumes.
+  **Recovery note (2026-09-11)**: 3.1-3.4 and 3.7.1-3.7.3 above were done as uncommitted working-tree
+  changes and briefly appeared lost after a `git reset --hard` cleared them. They were recovered intact
+  from a `git stash` commit that survived as a dangling object (never garbage-collected) after the stash
+  itself was dropped; see `recovery/ui-shell-phase3-wip` in the repo's reflog/branch history for how this
+  was found. Recovered `app/src/core_bridge.rs`/`app/src/main.rs`/`app/ui/AppWindow.slint` applied to
+  `develop` cleanly (`app/` hadn't been touched by anything landing since) except one adjustment: a test
+  helper's `Output { state: ZoneState::Playing, .. }` literal needed wrapping as `Some(ZoneState::Playing)`
+  to match `Output::state`'s now-`Option` type (see the `Output::state` fix entry above, landed afterward
+  on `develop` while this UI work was stashed). All four `cargo` gates re-verified green post-recovery.
+  Lesson for future sessions: prefer committing work-in-progress (even as a throwaway WIP commit) over
+  relying on an uncommitted working tree or an unpinned stash across a session boundary.
   Phase 1's rendered window was visually confirmed by the user (`Dissonanza_slint_example.png`): correct
   regions, live "Connection: discovering" status. Per the user's follow-up feedback, the skeleton's
   placeholder regions were then recolored from arbitrary grays to DESIGN.md's actual sampled dark-theme
@@ -401,6 +432,14 @@ dissonanza/
 - Flatpak submission is blocked on making the repo public (currently private, see TECH_STACK.md) and on generating `cargo-sources.json` once real dependencies are locked in.
 - AUR push in `publish.yml` is scaffolded but inert until `AUR_SSH_PRIVATE_KEY`/`AUR_USERNAME`/`AUR_EMAIL` secrets are configured, and until the package is claimed on AUR with a first manual push.
 - `PKGBUILD` checksums are placeholders (`SKIP`) until a real `v0.1.0` tag exists.
+- **Signal-path display** — Roon's UI has a read-only signal-path panel (source format → DSP chain →
+  output device), triggered by an icon in the transport bar (DESIGN.md's Icons section). The DSP chain
+  *contents* are Core-internal and permanently out of scope per CLAUDE.md, but whether the official
+  extension API exposes the signal-path *data itself* (format/chain summary, not DSP control) is
+  unconfirmed — no protocol study has looked for it, and none of `transport:2`'s already-studied model
+  types carry it. Flagged by the user (2026-09-08) as possibly worth surfacing later; needs its own
+  protocol study (same precedent `sood-moo.md`/`transport.md`/`browse.md` set) before it's buildable,
+  same status as `image:1` below.
 
 ## Recently changed
 
@@ -512,6 +551,139 @@ dissonanza/
   real Core — that's the next step, per CONTEXT.md's stated test for confirming or killing the
   hypothesis.
 
+- Started IMPL_UI_SHELL.md's Phase 3.7 (pixel-sampled corrections, user-reported after 3.4) on `develop`:
+  3.7.1 restructured `AppWindow.slint`'s root so the bottom transport bar spans the full window width
+  (including under the sidebar), matching real Roon rather than being confined to the content column —
+  confirmed by the user. 3.7.2 added a 1px `#4D4D51` divider between the bar and everything above it; the
+  user's separate ask for a sidebar/content vertical line was dropped once shown that real Roon has none
+  there. 3.7.3 recolored every transport-bar/zone-popup/volume-popover icon glyph to the pixel-sampled
+  `#CCCCCC` (was split between `#919191`/`#ffffff`), then corrected the queue icon's shape after the user
+  flagged a mismatch: pixel-by-pixel re-measurement showed the top/bottom lines are the same length and
+  the *middle* line is the short, inset one — not a monotonic size progression as the 2026-09-08 pass
+  first read it — and the triangle is smaller than first drawn, small enough to genuinely overlap the
+  lines' vertical span. DESIGN.md's Icons section updated with all of the above. All four `cargo` gates
+  green throughout (109 tests, unchanged — `.slint`-only changes). 3.7.4-3.7.6 (play/pause icon size,
+  slider thumbs, zone-switcher popup width/position) not started yet — steps are being confirmed one at a
+  time with the user per their explicit request; see IMPL_UI_SHELL.md's Phase 3.7 for the full plan.
+- Built the volume popover in `AppWindow.slint` (2026-09-09): IMPL_UI_SHELL.md Phase 3.4, on `develop`.
+  Added a `PopupWindow` (`volumePopover`) off the bottom bar's volume icon, mirroring 3.3's
+  `zoneSwitcherPopup` pattern — a click-to-set horizontal slider (same accent-fill + thumb style as the
+  seek bar) bound to the selected zone's first output's volume range, plus a "Mute"/"Unmute" text row,
+  sending `volumeChangeRequested`/`muteToggleRequested` → `BridgeCommand::ChangeVolume`/`Mute` (both
+  already existed from 3.1, unconstructed until now). `ZoneInfo` gained `outputId`/`hasVolume`/
+  `volumeMin`/`volumeMax`/`volumeValue`/`isMuted`, populated in `core_bridge::to_zone_infos` from
+  `zone.outputs.first()` per Phase 3's already-confirmed "grouped zone defaults to its first output"
+  design decision — `hasVolume` is false (popover renders nothing, same "renders nothing when nothing
+  applies" precedent the zone-name label already set) when there's no output, no `Volume`, or an
+  `incremental`-type `Volume` (whose `min`/`max`/`value` are always `None` per
+  `transport::model::Volume`'s own doc comment). `BridgeCommand`'s `#[allow(dead_code)]` narrowed to just
+  `Standby` — no step in this plan's Phase 3 wires it, so it's flagged as staying dead code for the
+  foreseeable future rather than silently left on the whole enum. No sampled screenshot exists for this
+  popover (DESIGN.md never captured one) — its layout is an implementation-level call styled to match
+  the existing seek-bar slider and "Pause all" row, flagged as a fidelity gap like the hand-drawn icons.
+  All four `cargo` gates green (115 tests: 100 `core` + 15 `app`, 5 new — a populated-volume case, a
+  no-output case, and an `incremental`-type case). Ran the built binary directly: no panics, clean log.
+  Computer-use screen access (available to 3.2/3.3) was denied when requested this session, so the
+  popover's on-screen appearance and click behavior aren't visually confirmed here — left to the user.
+- Applied the pixel-sampled transport-bar/popup corrections to `AppWindow.slint` (2026-09-08): the
+  user chose "everything now" once the findings below were sourced and documented. Redrew the queue
+  icon (play-triangle + three graduated lines), the output icon (bookshelf-speaker glyph: rounded-rect
+  outline, 4 corner dots, tweeter/woofer circles), and the volume icon (speaker-with-waves — a generic
+  approximation, explicitly flagged as not pixel-sampled with confidence); recolored the seek bar's
+  unfilled track to `#606060`; extended the zone-switcher popup with an inline play/pause button per
+  row and a "Pause all" row, both reusing/extending the existing command-channel pattern
+  (`controlRequested`, plus a new `pauseAllRequested()` → `BridgeCommand::PauseAll`, fanned out to every
+  zone inside `drive_connection`'s own loop since that's the only place `zones: Vec<Zone>` is held).
+  Deliberately not added: the signal-path indicator icon — it needs its own decision, not part of this
+  pass (see the Open work entry above). All four `cargo` gates green (106 tests, unchanged).
+  **Worth noting**: verifying the redrawn output icon's popup trigger by clicking visually-estimated
+  coordinates repeatedly failed to open the popup — genuinely looked like it might be a regression at
+  first. A temporary debug `background: red` on the icon's container (removed right after) showed the
+  real hit box was a few pixels off from every estimate; clicking its true position worked immediately.
+  No code bug, just a lesson that a 20×20px target from a zoomed screenshot needs a direct visual
+  ground-truth check rather than continued coordinate guessing.
+- Pixel-sampled the transport bar and zone-switcher popup from real screenshots, corrected DESIGN.md
+  (2026-09-08): the user saved 4 screenshots to `~/Pictures/Screenshots/` (two of the transport
+  bar/popup requested after the entry below, plus two more offered as possibly useful later — a
+  Signal-path panel and the expanded now-playing overlay). ImageMagick histogram reads (matching this
+  project's established sourcing method, not eyeballed) against `Screenshot_20260908_185235.png`/
+  `_185248.png` confirmed: seek-bar fill `#6A6ED9` (≈ the already-sampled `--accent`, no change), but
+  the unfilled track is `#606060` — visibly lighter than the `#333333` first used; the popup's
+  selected-row fill `#434581` (≈ the already-sampled `--accent-selected-bg`, no change); the queue icon
+  is a play-triangle + graduated lines, not three equal bars; the output icon is a proper
+  bookshelf-speaker glyph (rounded rect, 4 corner dots, tweeter+woofer circles), not a plain square.
+  Also **corrected a wrong guess from the prior entry**: the sparkle icon left of "previous" is a
+  **signal-path indicator** (opens a read-only source-format→DSP-chain→output-device panel,
+  `Screenshot_20260908_185311.png`), not "Roon Radio"/`auto_radio` — the user corrected this directly.
+  Its panel contents are Core-internal DSP detail, out of scope per CLAUDE.md, but whether the
+  signal-path *data* itself is exposed by the official API at all is unconfirmed — logged as a new Open
+  work item (needs its own protocol study, same precedent as `image:1`). The fourth screenshot
+  (expanded now-playing overlay) reconfirms love/unlove's placement next to the track title, already
+  resolved in an earlier session. DESIGN.md's Icons and Dropdown/menu & Bottom transport bar Components
+  entries all updated with these sourced, corrected values. No `.slint`/Rust changes in this entry —
+  documentation only; whether/when to apply these corrections to the actual bar is the user's call next.
+- Built the zone-switcher popup and reverted the sidebar to a placeholder (2026-09-08):
+  IMPL_UI_SHELL.md Phase 3.3, on `develop`. Moved Phase 2's zone list (unchanged data/selection model)
+  into a `PopupWindow`, matching Roon's own placement (DESIGN.md's Dropdown/menu entry); the sidebar
+  reverted to plain "Sidebar (placeholder)" text pending Phase 4's real browse categories. Iterated
+  twice on the trigger design after visually testing and user feedback: first version made the
+  zone-name *label* the trigger, which had a real bug (empty label collapsed to a zero-width,
+  unclickable hit target — no way to ever pick a *first* zone); the user then corrected the design
+  outright — the output **icon** should be the trigger instead (always present, fixed size), which
+  removes that bug entirely rather than working around it. The user also shared real screenshots of
+  Roon's own transport bar showing the zone name sits *below* the icon, not beside it — fixed to
+  match. Surfaced, not yet acted on: those same screenshots show a real speaker/volume icon (not
+  placeholders), a "Roon Radio" sparkle icon not in DESIGN.md's inventory at all (backed by
+  `transport::ZoneSettings::auto_radio`, already modeled but unwired), a differently-shaped queue
+  icon, and a richer zone-switcher popup (inline pause buttons per row, a "Pause all" row) than what's
+  built — decision on these pending, see IMPL_UI_SHELL.md's 3.3 entry. All four `cargo` gates green
+  throughout (106 tests, unchanged — `.slint`-only changes). 3.4 (the volume popover) is next, though
+  the open icon/popup-fidelity questions above may be worth resolving first.
+- Built the real bottom transport bar in `AppWindow.slint` (2026-09-08): IMPL_UI_SHELL.md Phase 3.2,
+  on `develop`. Hand-drawn `Path`/`Rectangle` icons for prev/play-pause/next/queue, a click-to-seek
+  bar (accent fill + thumb), art/output/volume placeholders, and "Nothing playing"-style idle
+  rendering, wired to two new callbacks (`controlRequested`/`seekRequested`) that `main.rs` sends as
+  real `BridgeCommand`s via a new `core_bridge::parse_control_action` helper (pure, unit-tested).
+  Discussed and confirmed with the user: keep 3.2 (layout + working controls) and 3.5 (live
+  now-playing/seek data) as separately staged steps rather than merging them, since `ZoneInfo` doesn't
+  carry `now_playing`/`seek_position` yet — the bar is fully laid out and its buttons genuinely work,
+  but shows the idle state until 3.5 feeds it real data. All four `cargo` gates green (106 tests).
+  **First phase to get computer-use screen access in this environment** (previous phases all flagged
+  this as a gap and relied on the user's own screenshots) — visually confirmed the bar renders
+  correctly and confirmed the full click→command pipeline fires end to end (clicking Play logged the
+  expected `not connected to a Roon Core` error from `transport::control`, proving it's a live call,
+  not just a rendered button). Icon shapes are simple hand-drawn approximations, not pixel-sampled
+  Roon glyphs (DESIGN.md's Icons section never captured exact SVG path data for the transport bar) —
+  flagged as a known, non-blocking fidelity gap. 3.3 (zone-switcher popup) is next.
+- Built `BridgeCommand`, the first UI→core direction in `core_bridge` (2026-09-08): IMPL_UI_SHELL.md
+  Phase 3.1, on `develop`. Added `BridgeCommand` (`Control`/`Seek`/`ChangeVolume`/`Mute`/`Standby`) and
+  wired `core_bridge::spawn` to create an `mpsc` channel, return its sender, and dispatch received
+  commands to `core::roon::transport`'s control verbs from a new arm in `drive_connection`'s
+  `tokio::select!` loop — logging failures rather than surfacing them to the UI, per the design decision
+  recorded in IMPL_UI_SHELL.md. `main.rs` holds the returned sender (unused until Phase 3.2-3.4 add
+  `.slint` callbacks to send on it); `BridgeCommand` carries a temporary, documented
+  `#[allow(dead_code)]` since `app` is a bin crate (nothing marks a variant "used" without an actual
+  caller, unlike `core`'s lib-crate `pub` API) — removing it is part of 3.2. All four `cargo` gates green
+  (104 tests, unchanged by this step — `dispatch_command` isn't separately testable from `app` without a
+  live Core, same precedent `subscribe_zones` set). Ran the built binary for 8s with no panics. Phase 3
+  is now in progress; 3.2 (the pixel-matched bottom bar itself) is next.
+- Resolved love/unlove/ban's placement and wrote up IMPL_UI_SHELL.md Phase 3's design (2026-09-08): a
+  user-supplied screenshot (`love_unlove_ban_menupopup.png`) resolved Phase 0's flagged gap — love/unlove
+  is a heart icon in the *expanded now-playing overlay* (not the bottom mini bar), and ban has no icon at
+  all, it's "Ban this track" inside that track's "•••" overflow menu. Both belong to a still-unbuilt
+  overlay surface, so Phase 3's bottom transport bar needs no love/unlove/ban treatment — this removed
+  IMPL_UI_SHELL.md's Open architectural question 2 outright rather than deferring it further. DESIGN.md's
+  Components and Icons entries updated with the finding. With that blocker cleared, confirmed Phase 3's one
+  remaining real design decision with the user (Gate 1 Clarify, mirroring Phase 1/2's own confirmation
+  step): UI-originated commands (play/pause/seek/volume/mute/standby/zone-select) — the first **UI → core**
+  direction this bridge has needed, every prior phase only pushed data core → UI — travel over one shared
+  `BridgeCommand` enum and `mpsc` channel, dispatched via a new arm in `drive_connection`'s existing
+  `tokio::select!` loop, mirroring the core→UI forwarding pattern already in place. Wrote Phase 3's full
+  numbered Gate-1 steps (3.1-3.6) into IMPL_UI_SHELL.md, along with the smaller implementation-level calls
+  made without separate confirmation (seek position sourced from `zones_seek_changed`'s dedicated channel,
+  volume/mute defaulting to a grouped zone's first output, command failures logged not surfaced, idle-state
+  rendering when no zone is selected). No code written yet — Phase 3 status is "not started," ready to
+  implement next.
 - Built the zone picker and wired zone subscription into `core_bridge` (2026-09-08):
   IMPL_UI_SHELL.md Phase 2, on `develop` (no feature branch, matching Phase 1's precedent). Confirmed
   two design decisions with the user first (Gate 1 Clarify, mirroring Phase 1's own confirmation step):
