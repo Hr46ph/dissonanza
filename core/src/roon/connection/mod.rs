@@ -6,6 +6,7 @@ mod config;
 mod error;
 mod keepalive;
 mod moo;
+mod pairing_store;
 mod requests;
 mod sood;
 mod state;
@@ -20,6 +21,7 @@ pub use sood::discovery::DiscoveryError;
 pub use state::{ConnectionEvent, ConnectionState};
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, watch};
@@ -28,6 +30,7 @@ use tokio::task::JoinHandle;
 use keepalive::Keepalive;
 use moo::handshake::{self, PairingEvent, PairingState};
 use moo::transport;
+use pairing_store::PairedCore;
 use requests::{CommandTx, ConnectionCommand};
 use sood::discovery::{self, DiscoveredCore};
 
@@ -141,10 +144,16 @@ async fn run(
     mut shutdown_rx: watch::Receiver<bool>,
     requests_tx: watch::Sender<Option<CommandTx>>,
 ) {
-    // Carried across reconnects within this process only — held in memory here, never written to
-    // disk, per CURRENT_STATE.md's deferral of real pairing-token persistence to a future
-    // cache-store phase. Resets to `None` on every process restart.
-    let mut saved_token: Option<String> = None;
+    // Persisted to disk (pairing_store) across process restarts, not just in-process reconnects
+    // — loaded once here, before the very first registration attempt this process makes.
+    // `pairing_store_path` is `None` only if no home directory could be found for the current
+    // user (rare); persistence is then silently skipped for this whole run, same as any other
+    // load/save failure.
+    let pairing_store_path = pairing_store::default_path();
+    let mut saved_token: Option<String> = pairing_store_path
+        .as_deref()
+        .and_then(pairing_store::load)
+        .map(|paired| paired.token);
     loop {
         send_state(&event_tx, ConnectionState::Discovering);
 
@@ -154,6 +163,7 @@ async fn run(
             &mut shutdown_rx,
             &requests_tx,
             &mut saved_token,
+            pairing_store_path.as_deref(),
         )
         .await
         {
@@ -187,6 +197,7 @@ async fn run_until_disconnected(
     shutdown_rx: &mut watch::Receiver<bool>,
     requests_tx: &watch::Sender<Option<CommandTx>>,
     saved_token: &mut Option<String>,
+    pairing_store_path: Option<&Path>,
 ) -> Result<(), ConnectionError> {
     let Some(core) = discover_first_core(shutdown_rx).await? else {
         return Ok(()); // shutdown requested before any Core was found
@@ -230,6 +241,18 @@ async fn run_until_disconnected(
     // Whatever token the Core just issued (whether this was a first-time registration or a
     // renewal of one already sent above) is what the next reconnect attempt should present.
     *saved_token = Some(registered.token.clone());
+    // Persisted to disk too, so a future process restart (not just this one's own reconnects)
+    // can present it as well. Best-effort: a write failure here must never break an otherwise-
+    // working Roon connection, matching `send_state`'s existing publish-or-drop pattern.
+    if let Some(path) = pairing_store_path {
+        let _ = pairing_store::save(
+            path,
+            &PairedCore {
+                core_id: registered.core_id.clone(),
+                token: registered.token.clone(),
+            },
+        );
+    }
 
     let mut pairing = PairingState::default();
     // Gates the staleness check below: before the Core actually pairs, the human may take a
