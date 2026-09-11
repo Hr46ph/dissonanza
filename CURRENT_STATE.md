@@ -36,6 +36,8 @@ dissonanza/
 │               ├── state.rs         # ConnectionState, ConnectionEvent
 │               ├── error.rs         # ConnectionError — wraps DiscoveryError/TransportError/HandshakeError
 │               ├── keepalive.rs     # Keepalive — app-level staleness health-check
+│               ├── pairing_store.rs # PairedCore, default_path/load/save — persists the pairing
+│               │                    #   token to disk across app restarts (private, never `pub`)
 │               ├── requests.rs      # ConnectionRequests/MooResponseStream/ConnectionRequestError — generic
 │               │                    #   MOO request/response multiplexing for other core::roon modules
 │               ├── sood/            # private: SOOD discovery, never `pub` outside `connection`
@@ -155,6 +157,19 @@ dissonanza/
     with a judgment-call default (60s timeout, checked every 10s) — `docs/protocol/sood-moo.md`
     doesn't document a Core-side app-level ping cadence to derive this from, flagged as an
     explicit assumption rather than a sourced value.
+  - `connection::pairing_store` — `PairedCore { core_id, token }`, `default_path`/`load`/`save`:
+    persists the pairing token to a small JSON file (not `rusqlite`, which isn't a dependency
+    anywhere in this repo yet and was earmarked for the separate album-art cache feature) at an
+    XDG-appropriate path (`directories` crate, Flatpak-safe) so a relaunch of this app doesn't
+    need to re-Enable/re-pair. A single saved pair, not a map — multi-Core is a permanent
+    non-goal (NORTH-STAR.md). Synchronous `std::fs` I/O deliberately, not `tokio::fs`: both calls
+    are rare, small-file operations (once at `run()`'s start, once per successful registration),
+    not worth async complexity on this app's single-thread runtime. `load` collapses every
+    failure mode (missing file, malformed JSON, io error) to `None` — the caller's fallback
+    (register as unseen) is identical regardless of why; `save` returns a real `Result` its
+    caller in `connection/mod.rs` explicitly discards (`let _ = ...`), matching `send_state`'s
+    existing publish-or-drop pattern — a local cache-file write failing must never break an
+    otherwise-working Roon connection.
   - `sood::message` — SOOD TLV packet parsing/encoding (`SoodMessage`, `SoodError`). Pure, no I/O.
   - `sood::discovery` — the multicast discovery loop: one send/receive socket per local IPv4
     interface (`socket2`), 5s interface re-enumeration (`if-addrs`), query cadence (10s×6 then 60s),
@@ -378,11 +393,9 @@ dissonanza/
   worth a follow-up screenshot against a real Core. Still open: a proper light/dark palette singleton, no
   shutdown-on-window-close handling yet, and `connection_config`'s `email`/`website` fields are guesses
   pending the user's real contact details.
-- Pairing-token persistence across a full app restart is still deferred until a cache-store phase
-  exists. `run()` in [core/src/roon/connection/mod.rs](core/src/roon/connection/mod.rs) now holds
-  the token from the last successful `Registered` in memory and resends it on every subsequent
-  reconnect *within the same process* (2026-09-11, see Recently changed) — but that variable resets
-  to `None` on every process restart, so a fresh app launch still registers as unseen.
+- ~~Pairing-token persistence across a full app restart~~ — **done** (2026-09-11, see Recently
+  changed): now persisted to disk via `connection::pairing_store`, not just in-memory across
+  in-process reconnects.
 - Cache invalidation strategy for locally cached album art (when to refresh on a new Roon scan or changed art) undecided.
 - DESIGN.md's color tokens, typography scale, and layout/component detail (including the settings screen and a toggle-switch/button/text-input set) are now sampled from screenshots (2026-09-08, see Recently changed). Still open: love/unlove/ban's exact on-screen placement outside list rows, and hover/focus/disabled states for most components.
 - Flatpak submission is blocked on making the repo public (currently private, see TECH_STACK.md) and on generating `cargo-sources.json` once real dependencies are locked in.
@@ -391,6 +404,26 @@ dissonanza/
 
 ## Recently changed
 
+- Persisted the pairing token to disk across app restarts (2026-09-11): the user reported that
+  every restart of Dissonanza required Enable again in Roon's Extensions UI, and — more
+  seriously — created a *new* pending entry each time rather than being recognized as the same
+  one, leaving several dozen stale entries to clean up. Root cause: `extension_id` is stable
+  (`io.github.hr46ph.dissonanza`, hardcoded in `core_bridge.rs`), but the pairing token from the
+  earlier in-process-only persistence change reset to `None` on every process launch, so every
+  restart's `register` looked identical to a completely unseen extension to the Core — matching
+  round 3's own finding that `node-roon-api` resends a previously-issued token specifically to
+  avoid this. Added `connection::pairing_store` (new file, see Modules above): a small JSON file
+  at an XDG-appropriate path via the new `directories` dependency (bare-major-pinned "6.0.0" by
+  `cargo add`, left as-is — matches `tokio-tungstenite`/`futures-util`/`bytes`'s existing exact-
+  pin style in `core/Cargo.toml`, not universal in this file). `run()` now loads any saved token
+  once at startup (before the first registration attempt) instead of always starting from `None`,
+  and `run_until_disconnected` saves the token to disk (in addition to the existing in-memory
+  `saved_token`) after every successful registration. 4 new tests (round-trip, missing file,
+  malformed JSON, parent-directory creation) using hand-rolled unique temp paths rather than a new
+  `tempfile` dev-dependency. All four `cargo` gates green (113 tests: 4 `app` + 109 `core`, 4
+  new). **Not yet re-verified against a real Core** — the test that actually confirms this fixed
+  the duplicate-entry problem is restarting the app and checking Roon's Extensions UI shows only
+  Enable, reusing the same entry, not a new one.
 - Fixed the zone-subscription error following the live pairing fix above (2026-09-11):
   `Connection: zone subscription error: malformed Subscribed body: missing field 'state'`. Added
   temporary diagnostic logging (`eprintln!` in `zones.rs`'s `parse_zone_event`, removed once done)
