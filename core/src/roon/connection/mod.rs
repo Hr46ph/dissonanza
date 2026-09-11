@@ -218,6 +218,11 @@ async fn run_until_disconnected(
     };
 
     let mut pairing = PairingState::default();
+    // Gates the staleness check below: before the Core actually pairs, the human may take a
+    // while to approve it in Roon's own UI, and the Core sends nothing at the MOO level while
+    // waiting — normal, expected silence, not staleness. Only once paired does silence past
+    // `KEEPALIVE_TIMEOUT` mean the connection genuinely went quiet.
+    let mut paired = false;
     let mut keepalive = Keepalive::new(KEEPALIVE_TIMEOUT, Instant::now());
     let mut keepalive_check = tokio::time::interval(KEEPALIVE_CHECK_INTERVAL);
 
@@ -241,7 +246,7 @@ async fn run_until_disconnected(
                 }
             }
             _ = keepalive_check.tick() => {
-                if keepalive.is_stale(Instant::now()) {
+                if paired && keepalive.is_stale(Instant::now()) {
                     return stop_transport_and_finish(transport_stop_tx, transport_task).await;
                 }
             }
@@ -273,6 +278,8 @@ async fn run_until_disconnected(
                         Some(ProvidedService::Pairing) => {
                             let event = pairing.handle_request(&outbound_tx, &registered.core_id, &msg)?;
                             if let Some(PairingEvent::Paired { core_id }) = event {
+                                paired = true;
+                                keepalive.record_activity(Instant::now());
                                 send_state(event_tx, ConnectionState::Paired { core_id });
                             }
                         }

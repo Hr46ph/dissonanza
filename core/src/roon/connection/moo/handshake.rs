@@ -53,7 +53,7 @@ pub(crate) async fn register(
     saved_token: Option<&str>,
 ) -> Result<Registered, HandshakeError> {
     send_request(outbound_tx, 1, "com.roonlabs.registry:1/info", None)?;
-    recv_complete(inbound_rx, 1, "registry:1/info").await?;
+    recv_response(outbound_tx, inbound_rx, 1, false, "registry:1/info").await?;
 
     let mut body = serde_json::json!({
         "extension_id": config.extension_id,
@@ -78,7 +78,10 @@ pub(crate) async fn register(
         "com.roonlabs.registry:1/register",
         Some(body),
     )?;
-    let response = recv_complete(inbound_rx, 2, "registry:1/register").await?;
+    // The Core answers this one with a `CONTINUE`, not a `COMPLETE` — confirmed against a live
+    // Core, see docs/protocol/sood-moo.md's step 4. A client that only accepted `COMPLETE` here
+    // would hang forever even once the ping-during-handshake issue below is handled.
+    let response = recv_response(outbound_tx, inbound_rx, 2, true, "registry:1/register").await?;
     if response.name != "Registered" {
         return Err(HandshakeError::RegistrationFailed(response.name));
     }
@@ -265,13 +268,20 @@ fn send(
         .map_err(|_| HandshakeError::ConnectionClosed(name))
 }
 
-/// Waits for the `COMPLETE` matching `request_id`, ignoring any `CONTINUE`s, any inbound
-/// `REQUEST`s (Core-initiated calls like `pair`/`ping:1`, handled by later steps), and any
-/// `COMPLETE` for an unrelated request id — the two directions assign ids independently, so a
-/// collision is possible.
-async fn recv_complete(
+/// Waits for the `COMPLETE` matching `request_id` (or, if `accept_continue`, the first
+/// `CONTINUE` too — `registry:1/register` answers with `CONTINUE Registered`, not `COMPLETE`,
+/// per docs/protocol/sood-moo.md's step 4). Along the way, answers any inbound
+/// `com.roonlabs.ping:1/ping` REQUEST inline via [`handle_ping_request`] instead of discarding
+/// it: the Core is observed sending these *during* the handshake itself, before either step's
+/// own response arrives, and leaving one unanswered gets the connection reset within seconds.
+/// Any other inbound `REQUEST` (e.g. a `pair` call arriving unusually early) and any
+/// `CONTINUE`/`COMPLETE` for an unrelated request id are ignored — the two directions assign ids
+/// independently, so a collision is possible.
+async fn recv_response(
+    outbound_tx: &mpsc::UnboundedSender<MooMessage>,
     inbound_rx: &mut mpsc::UnboundedReceiver<MooMessage>,
     request_id: u32,
+    accept_continue: bool,
     step: &'static str,
 ) -> Result<MooMessage, HandshakeError> {
     loop {
@@ -279,8 +289,13 @@ async fn recv_complete(
             .recv()
             .await
             .ok_or(HandshakeError::ConnectionClosed(step))?;
-        if msg.verb == MooVerb::Complete && msg.request_id == request_id {
+        if msg.request_id == request_id
+            && (msg.verb == MooVerb::Complete || (accept_continue && msg.verb == MooVerb::Continue))
+        {
             return Ok(msg);
+        }
+        if msg.verb == MooVerb::Request && msg.name == "com.roonlabs.ping:1/ping" {
+            handle_ping_request(outbound_tx, &msg)?;
         }
     }
 }
@@ -492,6 +507,106 @@ mod tests {
         .await
         .expect("registration succeeds");
 
+        server.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn accepts_a_continue_as_the_register_response() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let (inbound_tx, mut inbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+
+        let server = tokio::spawn(async move {
+            let info = outbound_rx.recv().await.expect("info request");
+            inbound_tx
+                .send(complete("Success", info.request_id, None))
+                .expect("reply to info");
+
+            let register = outbound_rx.recv().await.expect("register request");
+            // A `CONTINUE`, not a `COMPLETE` — the real Core's actual behavior for this step.
+            inbound_tx
+                .send(MooMessage {
+                    verb: MooVerb::Continue,
+                    name: "Registered".to_string(),
+                    request_id: register.request_id,
+                    headers: HashMap::new(),
+                    body: Some(MooBody::Json(serde_json::json!({
+                        "core_id": "core-1",
+                        "token": "tok-1",
+                        "display_name": "Roon Core",
+                        "display_version": "2.0",
+                        "provided_services": [],
+                    }))),
+                })
+                .expect("reply to register");
+        });
+
+        let registered = register(
+            &outbound_tx,
+            &mut inbound_rx,
+            &config(),
+            &[],
+            &[],
+            &[],
+            None,
+        )
+        .await
+        .expect("registration succeeds despite a CONTINUE reply");
+
+        assert_eq!(registered.core_id, "core-1");
+        server.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn answers_a_ping_request_that_arrives_before_registration_completes() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+        let (inbound_tx, mut inbound_rx) = mpsc::unbounded_channel::<MooMessage>();
+
+        let server = tokio::spawn(async move {
+            let info = outbound_rx.recv().await.expect("info request");
+            inbound_tx
+                .send(complete("Success", info.request_id, None))
+                .expect("reply to info");
+
+            let register = outbound_rx.recv().await.expect("register request");
+
+            // The Core sends a ping *during* the handshake, before register's own response.
+            inbound_tx
+                .send(pairing_request("com.roonlabs.ping:1/ping", 100))
+                .expect("send ping request");
+
+            let ping_reply = outbound_rx.recv().await.expect("a reply to the ping");
+            assert_eq!(ping_reply.verb, MooVerb::Complete);
+            assert_eq!(ping_reply.name, "Success");
+            assert_eq!(ping_reply.request_id, 100);
+
+            inbound_tx
+                .send(complete(
+                    "Registered",
+                    register.request_id,
+                    Some(MooBody::Json(serde_json::json!({
+                        "core_id": "core-1",
+                        "token": "tok-1",
+                        "display_name": "Roon Core",
+                        "display_version": "2.0",
+                        "provided_services": [],
+                    }))),
+                ))
+                .expect("reply to register");
+        });
+
+        let registered = register(
+            &outbound_tx,
+            &mut inbound_rx,
+            &config(),
+            &[],
+            &[],
+            &[],
+            None,
+        )
+        .await
+        .expect("registration succeeds despite the interleaved ping");
+
+        assert_eq!(registered.core_id, "core-1");
         server.await.expect("server task");
     }
 

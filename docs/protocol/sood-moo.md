@@ -126,10 +126,24 @@ connection):
    `extension_id`, `display_name`, `display_version`, `publisher`, `email`, optionally `website`,
    `required_services`/`optional_services`/`provided_services` (arrays of service-name strings),
    and `token` if step 2 found a saved one for this `core_id`.
-4. On success, `COMPLETE Registered` arrives with a body containing at least `core_id`, `token`
-   (persist this, keyed by `core_id`, for reconnect without re-pairing), `display_name`,
-   `display_version`, and `provided_services` (what the Core actually offers — used to instantiate
-   client-side wrappers for the services this extension declared as required/optional).
+4. On success, a `CONTINUE Registered` arrives (**not** `COMPLETE` — confirmed against a live Core
+   and cross-checked against `node-roon-api`'s own `moo.js`, which explicitly tolerates a
+   `CONTINUE` before the eventual `COMPLETE`; `registry:1/register` behaves like an open-ended
+   subscription on the wire, not a one-shot request/response) with a body containing at least
+   `core_id`, `token` (persist this, keyed by `core_id`, for reconnect without re-pairing),
+   `display_name`, `display_version`, and `provided_services` (what the Core actually offers —
+   used to instantiate client-side wrappers for the services this extension declared as
+   required/optional). A client that waits only for `COMPLETE` here will hang indefinitely.
+4a. **The Core sends `com.roonlabs.ping:1/ping` requests during the handshake itself** — observed
+   arriving before either step 2's or step 3's own response, sometimes within 1-2 seconds of
+   sending `register`. A client must answer these inline (`COMPLETE Success`, the same reply
+   `com.roonlabs.ping:1` always gives) rather than deferring them until after the handshake
+   completes; left unanswered, the Core resets the TCP connection within seconds
+   (`WebSocket protocol error: Connection reset without closing handshake`) — before the human even
+   gets a chance to see the pairing prompt. A brand-new `extension_id` can also take anywhere from
+   tens of seconds to over a minute for `Registered` to actually arrive, observed with no
+   interactive Roon Remote open to approve anything — a client must simply keep waiting through
+   that silence (answering any ping requests that arrive during it), not time this step out.
 5. Registering is **not** the same as being paired for control. To receive Roon's actual
    pair/unpair signal, the extension must itself provide the `com.roonlabs.pairing:1` service
    (subscribe/get/pair methods) as one of its `provided_services` — the Core calls `pair` on it
@@ -144,6 +158,14 @@ connection):
 ping/pong (reference: ping every 10s, connection considered dead and closed after one missed
 pong). This is transport-level liveness, distinct from — and in addition to — the
 `core_paired`/`core_unpaired` health-check contract in CLAUDE.md §2.
+
+**Empty binary WS frames**: an occasional zero-length binary frame has been observed on the wire,
+most likely a `tokio-tungstenite` artifact of one last, empty read as a connection resets (it
+coincided with a `register` handshake that was about to be torn down for the unanswered-ping
+reason above) rather than a deliberate Core-sent keepalive — though `node-roon-api` itself also
+hits one, later, during an already-paired, healthy session, immediately before a clean reconnect,
+so a genuine Core-side cause isn't ruled out either. Safe to treat as a no-op either way: a MOO
+message always has a non-empty header block, so a zero-length frame can never be a real message.
 
 ## Rust design notes (for whoever implements `core::roon`)
 

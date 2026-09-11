@@ -112,6 +112,13 @@ pub(crate) async fn run(
                     // level; nothing for us to do here.
                     Some(Ok(Message::Ping(_))) => {}
                     Some(Ok(Message::Binary(bytes))) => {
+                        // A MOO message always has a non-empty header block, so a zero-length
+                        // frame can never be a real one — observed as a connection-reset
+                        // artifact, per docs/protocol/sood-moo.md's Empty binary WS frames
+                        // section; safe to ignore as a no-op rather than a fatal framing error.
+                        if bytes.is_empty() {
+                            continue;
+                        }
                         let msg = MooMessage::decode(&bytes)?;
                         if inbound_tx.send(msg).is_err() {
                             // The caller dropped its receiver — nothing left to deliver to.
@@ -247,6 +254,56 @@ mod tests {
         .expect("run finishes before timeout");
 
         assert!(matches!(result, Err(TransportError::Framing(_))));
+        server.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn empty_binary_frame_is_ignored_as_a_keepalive() {
+        let (addr, listener) = bind_mock_server().await;
+
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.expect("accept");
+            let ws = accept_async(tcp).await.expect("server handshake");
+            let (mut server_sink, _server_stream) = ws.split();
+
+            // A zero-length binary frame, followed by a real message — the empty frame must
+            // not end the connection or otherwise stop the real one from arriving.
+            server_sink
+                .send(Message::Binary(Bytes::new()))
+                .await
+                .expect("send empty frame");
+            let reply = MooMessage {
+                verb: MooVerb::Complete,
+                name: "Success".to_string(),
+                request_id: 1,
+                headers: HashMap::new(),
+                body: None,
+            };
+            server_sink
+                .send(Message::Binary(Bytes::from(reply.encode())))
+                .await
+                .expect("send reply");
+        });
+
+        let (_outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+        let (inbound_tx, mut inbound_rx) = mpsc::unbounded_channel();
+        let (_stop_tx, stop_rx) = watch::channel(false);
+
+        let _client = tokio::spawn(run(
+            addr,
+            Duration::from_secs(30),
+            outbound_rx,
+            inbound_tx,
+            stop_rx,
+        ));
+
+        let reply = tokio::time::timeout(Duration::from_secs(5), inbound_rx.recv())
+            .await
+            .expect("reply arrives before timeout")
+            .expect("reply channel open");
+        assert_eq!(reply.name, "Success");
+        assert_eq!(reply.request_id, 1);
+
         server.await.expect("server task");
     }
 
