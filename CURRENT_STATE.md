@@ -391,6 +391,22 @@ dissonanza/
 
 ## Recently changed
 
+- Fixed the zone-subscription error following the live pairing fix above (2026-09-11):
+  `Connection: zone subscription error: malformed Subscribed body: missing field 'state'`. Added
+  temporary diagnostic logging (`eprintln!` in `zones.rs`'s `parse_zone_event`, removed once done)
+  to capture the real Core's exact `Subscribed` body rather than guessing — same method that found
+  the pairing bugs. Root cause: `Output::state` (not `Zone::state`) is genuinely absent on a live
+  Core's output whose only `source_controls` entry is `"status": "indeterminate"` — the JSDoc and
+  `docs/protocol/transport.md`'s original study both listed it as required, same as `Zone::state`,
+  but the parent zone's own `state` *was* present in that same body, so this is specifically an
+  `Output`-level divergence. [`transport::model::Output::state`](core/src/roon/transport/model.rs)
+  is now `Option<ZoneState>` with `#[serde(default)]`; `docs/protocol/transport.md` corrected to
+  match. One new test (`output_state_is_optional`, using the exact live-observed shape). Nothing
+  in `app` touches `Output::state` (only `Zone::state`, via `describe_zone_state`), so this is
+  fully isolated to `core::roon::transport`. All four `cargo` gates green (109 tests: 4 `app` +
+  105 `core`, 1 new). **Re-verified against a real Core the same day**: user rebuilt and tested —
+  holds at `paired (<core_id>)` with no error, confirming this was the last open item from
+  CONTEXT.md's live-pairing investigation.
 - Self-pair immediately on successful registration, instead of waiting for an inbound `pair`
   REQUEST (2026-09-11): the user asked why the reference `roon-web-controller` only ever needs
   Enable, never a separate Pair click, even on a fully-revoked-authorization first run. Re-cloned
