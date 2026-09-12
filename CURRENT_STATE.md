@@ -79,11 +79,14 @@ dissonanza/
 │   │   └── AppWindow.slint       # root window: sidebar (zone list, Phase 2, temporary — moves into the
 │   │                             #   zone-switcher popup's trigger area at Phase 4) + content-area
 │   │                             #   placeholder + a full-width bottom transport bar (IMPL_UI_SHELL.md
-│   │                             #   Phase 3.1-3.4, 3.7.1-3.7.3): prev/play-pause/next/queue controls,
-│   │                             #   a click-to-seek bar, a zone-switcher popup and a volume/mute
-│   │                             #   popover off the output icon, pixel-sampled colors/icon shapes per
-│   │                             #   DESIGN.md. Phase 3.5 (live now-playing/seek data) and 3.7.4-3.7.6
-│   │                             #   (icon-size/thumb/popup-width polish) not started.
+│   │                             #   Phase 3.1-3.5, 3.7.1-3.7.6, all done): prev/play-pause/next/queue
+│   │                             #   controls (gated by the selected zone's is*Allowed flags), a
+│   │                             #   click-to-seek bar, a zone-switcher popup and a volume/mute popover
+│   │                             #   off the output icon, pixel-sampled colors/icon shapes per DESIGN.md.
+│   │                             #   The bar reads `currentZone` (`zones[selectedZoneIndex]`, kept in
+│   │                             #   sync by `core_bridge`) for live title/artist/seek/gating data — see
+│   │                             #   the `app` Modules entry below. Only Phase 3.6 (manual verification
+│   │                             #   against a real Core) remains open in Phase 3.
 │   └── src/
 │       ├── main.rs           # AppWindow::new() -> core_bridge::spawn(weak) -> wires controlRequested/
 │       │                     #   seekRequested/pauseAllRequested/volumeChangeRequested/
@@ -111,6 +114,8 @@ dissonanza/
 │   ├── IMPL_CORE_CONNECTION.md   # completed implementation plan for core::roon::connection (Phases 0-4)
 │   ├── IMPL_TRANSPORT.md   # completed implementation plan for core::roon::transport (Phases 0-5)
 │   ├── IMPL_BROWSE.md      # completed implementation plan for core::roon::browse (Phases 0-2)
+│   ├── IMPL_CONNECTION_FASTPATH.md   # completed implementation plan for the cached-address
+│   │                                  #   startup fast path (Phases 1-5) — see Recently changed
 │   └── protocol/
 │       ├── sood-moo.md    # SOOD/MOO wire-protocol study — normative reference for core::roon::connection
 │       ├── transport.md   # com.roonlabs.transport:2 wire-protocol study — normative reference for
@@ -128,10 +133,15 @@ dissonanza/
   mpsc::UnboundedReceiver<ConnectionEvent>)` wires discovery → MOO connect → registry handshake →
   the pairing:1/ping:1 request loop → keepalive into one task, looping back to a fresh
   `Discovering` pass on any disconnect (transport closed, keepalive stale, a step failed) until
-  `ConnectionHandle::shutdown` is called — SOOD discovery starts over from scratch every time, so
-  a Core's address is never redialed, per CLAUDE.md's mandatory technical choices. `sood`/`moo`
-  stay private modules (only reachable from `connection` itself, via `pub(super)`) — nothing
-  outside this module calls them directly.
+  `ConnectionHandle::shutdown` is called — every reconnect runs SOOD discovery alone, so a Core's
+  address is never redialed on reconnect, per CLAUDE.md's mandatory technical choices. Only the
+  very first connection attempt this process makes differs (IMPL_CONNECTION_FASTPATH.md, done):
+  `resolve_moo_addr` races a bounded liveness probe of the last-known address persisted by
+  `pairing_store` (if any) concurrently against that same fresh discovery pass — discovery is
+  never delayed or deprioritized by this, and wins any tie or overlap, so a stale cached address
+  just degrades to exactly the no-cache behavior. `sood`/`moo` stay private modules (only
+  reachable from `connection` itself, via `pub(super)`) — nothing outside this module calls them
+  directly.
   - `connection::requests` — `ConnectionRequests`: a `Clone`-able handle (IMPL_TRANSPORT.md Phase
     1, done) other `core::roon` modules use to send their own MOO requests
     (`send_request(name, body) -> Result<MooResponseStream, ConnectionRequestError>`) over
@@ -164,9 +174,11 @@ dissonanza/
     with a judgment-call default (60s timeout, checked every 10s) — `docs/protocol/sood-moo.md`
     doesn't document a Core-side app-level ping cadence to derive this from, flagged as an
     explicit assumption rather than a sourced value.
-  - `connection::pairing_store` — `PairedCore { core_id, token }`, `default_path`/`load`/`save`:
-    persists the pairing token to a small JSON file (not `rusqlite`, which isn't a dependency
-    anywhere in this repo yet and was earmarked for the separate album-art cache feature) at an
+  - `connection::pairing_store` — `PairedCore { core_id, token, cached_addr }`,
+    `default_path`/`load`/`save`: persists the pairing token, plus the MOO address that last
+    succeeded (`cached_addr`, `#[serde(default)]` so a file saved before this field existed still
+    loads fine as `None`), to a small JSON file (not `rusqlite`, which isn't a dependency anywhere
+    in this repo yet and was earmarked for the separate album-art cache feature) at an
     XDG-appropriate path (`directories` crate, Flatpak-safe) so a relaunch of this app doesn't
     need to re-Enable/re-pair. A single saved pair, not a map — multi-Core is a permanent
     non-goal (NORTH-STAR.md). Synchronous `std::fs` I/O deliberately, not `tokio::fs`: both calls
@@ -327,17 +339,32 @@ dissonanza/
     `None` on any other state or once the stream ends (Core-ended or connection-lost, indistinguishable
     per docs/protocol/transport.md — re-subscribing next `Paired` is automatic either way).
     `apply_zone_event` (pure: `Subscribed` replaces the in-memory `Vec<Zone>` wholesale, `Changed` applies
-    added/changed/removed by `zone_id`, `zones_seek_changed` deliberately ignored until Phase 3's
-    transport bar needs it) and `to_zone_infos` (maps to the `.slint`-generated `ZoneInfo`) are unit-tested
-    directly — `app`'s first 4 unit tests, no live Core or Slint runtime involved, mirroring `core`'s own
-    pure-parser precedent. `AppWindow.slint` replaced the sidebar's placeholder text with a `zones`-driven
-    clickable list (`selectedZoneId` set by each row's `TouchArea`, highlighted with DESIGN.md's sampled
-    `--accent-selected-bg`) — a temporary home. **Confirmed by the user (2026-09-08)**: Roon has no
-    persistent zone list anywhere in its own UI — the real (and only) home for one is the
+    added/changed/removed by `zone_id`; `zones_seek_changed` was deliberately ignored here at Phase 2
+    time, until Phase 3.5 below needed it) and `to_zone_infos` (maps to the `.slint`-generated `ZoneInfo`)
+    are unit-tested directly — `app`'s first 4 unit tests, no live Core or Slint runtime involved,
+    mirroring `core`'s own pure-parser precedent. `AppWindow.slint` replaced the sidebar's placeholder text
+    with a `zones`-driven clickable list (`selectedZoneId` set by each row's `TouchArea`, highlighted with
+    DESIGN.md's sampled `--accent-selected-bg`) — a temporary home. **Confirmed by the user (2026-09-08)**:
+    Roon has no persistent zone list anywhere in its own UI — the real (and only) home for one is the
     zone-switcher popup, opened from the zone-name label in the bottom transport bar's bottom-right
     corner next to the volume icon (see DESIGN.md's Dropdown/menu and Bottom transport bar entries).
     Decision: leave the sidebar placement as-is until Phase 3 builds that bar, then relocate the
     presentation there — Phase 2's data/selection wiring carries over unchanged.
+  - **Phase 3 (done except 3.6's manual verification)** — the bottom transport bar (3.1-3.4, 3.7.1-3.7.3,
+    all previously landed) now also carries live now-playing/seek/gating data (3.5) and the remaining
+    pixel-sampled polish (3.7.4-3.7.6), all built in one session (2026-09-11) — see IMPL_UI_SHELL.md's
+    Phase 3.5/3.7 entries for full detail and this file's Recently-changed entries below for the summary.
+    In short: `ZoneInfo` (both the `.slint` struct and `to_zone_infos`) now carries
+    `nowPlayingTitle`/`nowPlayingArtist`/`seekPositionSeconds`/`lengthSeconds`/`elapsedLabel`/
+    `remainingLabel`/the five `is*Allowed` gating flags; `apply_zone_event` applies `zones_seek_changed`
+    instead of discarding it; the bar reads all of this off a new `currentZone` property
+    (`root.zones[root.selectedZoneIndex]`) rather than the flat `nowPlayingTitle`-etc. properties Phase
+    3.2 originally stubbed, since `.slint`'s imperative code has no general loop/search construct to pick
+    one zone out of the list by id directly (confirmed against the Slint 1.17 compiler's own grammar —
+    flagged as a real, verified constraint, not an assumption). `selectedZoneIndex` is kept correct by
+    the zone-switcher popup's row click (sets it immediately from its own loop index) and by
+    `core_bridge::set_zones` (re-resolves it from `selectedZoneId` on every push, so a list reorder can't
+    leave it stale).
 
 ## Open work
 
@@ -390,20 +417,20 @@ dissonanza/
   precedent every prior phase used). Phase 0 (DESIGN.md sampling from screenshots), Phase 1 (Slint/tokio
   integration bridge + an unstyled window skeleton), and Phase 2 (zone picker + connection status) are
   all done — see the `app` entry under Modules above and DESIGN.md for the sampled tokens. Phase 3
-  (now-playing/transport bar) is in progress: 3.1 (`BridgeCommand` UI→core command channel), 3.2 (the
-  real bottom transport bar), 3.3 (the zone-switcher popup, both visually confirmed), and 3.4 (the
-  volume popover, not visually confirmed — computer-use access was denied this session) are done,
-  3.5-3.6 are not started — see the Recently changed entries below. Phases 4-5 (browse/grid/list,
-  settings) are still outlined only, pending fine-grained steps.
-  **Phase 3.7 (pixel-sampled layout/icon corrections, user-reported after 3.4) is also in progress**:
-  3.7.1 (full-width bottom bar), 3.7.2 (divider line), and 3.7.3 (icon color + a queue-icon shape
-  correction) are done and user-confirmed; 3.7.4-3.7.6 (play/pause icon size, slider thumbs,
-  zone-switcher popup width/position) are not started — steps are being confirmed one at a time with
-  the user before each is implemented, per their explicit request. See IMPL_UI_SHELL.md's Phase 3.7 for
-  the full step list and CURRENT_STATE.md's Recently-changed entries for what's landed so far. The
-  live-Core connection issue that paused this work on 2026-09-10 is now fixed (see the pairing/
-  self-pair/token-persistence/`Output::state` entries above, all confirmed against a real Core) — 3.7.4
-  is the next step whenever the user resumes.
+  (now-playing/transport bar) is **done except 3.6** (manual verification against a real Core, not yet
+  performed): 3.1 (`BridgeCommand` UI→core command channel), 3.2 (the bottom transport bar), 3.3 (the
+  zone-switcher popup), 3.4 (the volume popover), and 3.5 (live now-playing/seek/gating data — landed
+  2026-09-11, see the `app` Modules entry above and the Recently-changed entry below) are all done.
+  Phases 4-5 (browse/grid/list, settings) are still outlined only, pending fine-grained steps.
+  **Phase 3.7 (pixel-sampled layout/icon corrections, user-reported after 3.4) is done**: 3.7.1
+  (full-width bottom bar), 3.7.2 (divider line), 3.7.3 (icon color + queue-icon shape), 3.7.4 (play/pause
+  icon size ratio), 3.7.5 (white/larger slider thumbs), and 3.7.6 (zone-switcher popup width/position +
+  "Pause all" row centering) all landed — see IMPL_UI_SHELL.md's Phase 3.7 for full detail. 3.7.4-3.7.6
+  were built in the same session as 3.5 (2026-09-11) per the user's explicit instruction to do so, rather
+  than pausing for confirmation between each as the section's original process called for. **Not visually
+  confirmed against a real Core this session** — computer-use screen access wasn't available; the user's
+  own verification against the live pairing fixed in the entries above (self-pair, token persistence,
+  `Output::state`) is still the next real-world test for all of 3.5/3.7.4-3.7.6 together.
   **Recovery note (2026-09-11)**: 3.1-3.4 and 3.7.1-3.7.3 above were done as uncommitted working-tree
   changes and briefly appeared lost after a `git reset --hard` cleared them. They were recovered intact
   from a `git stash` commit that survived as a dangling object (never garbage-collected) after the stash
@@ -443,6 +470,66 @@ dissonanza/
 
 ## Recently changed
 
+- Landed IMPL_CONNECTION_FASTPATH.md (2026-09-12), all 5 phases, on `develop`: the user reported
+  Dissonanza's connection to a paired Core is usually instant on launch but occasionally takes a
+  few seconds while it "starts discovering" first — inherent variance in SOOD's UDP multicast
+  round-trip (a lost first query costs a full 10s wait for the next one). Per the user's
+  clarification of CLAUDE.md's "always rediscover via SOOD" rule (about not hardcoding a value in
+  source, not about disk persistence), `connection::pairing_store`'s `PairedCore` now also
+  persists the MOO address that last succeeded (`cached_addr: Option<SocketAddr>`,
+  `#[serde(default)]` for old files). `connection::mod`'s new `resolve_moo_addr` races a bounded
+  liveness probe of that address (`moo::transport::probe`, `FAST_PATH_CONNECT_TIMEOUT` = 3s)
+  concurrently against a fresh SOOD discovery pass, on the process's very first connection attempt
+  only — every reconnect-after-disconnect still passes `None` and runs discovery alone, unchanged.
+  Discovery is never delayed by the probe and wins any tie, since SOOD stays the protocol's actual
+  source of truth; racing only up to "is this address reachable and speaking MOO" rather than all
+  the way through registration avoids ever running two concurrent `registry:1/register` handshakes
+  against the same Core with the same token. Also added `moo::transport::run`'s own
+  `connect_timeout` parameter (a previously-unbounded `connect_async` call could otherwise hang on
+  a stale or unreachable address for however long the OS takes to give up on the TCP handshake),
+  with `DISCOVERY_CONNECT_TIMEOUT` (15s) bounding the real post-race connect regardless of which
+  side won. CLAUDE.md's mandatory-choices bullet on hardcoding a Core's address was reworded to
+  reflect this. 5 new tests (126 → 131: `pairing_store`'s `cached_addr` round-trip + backward
+  compatibility, `moo::transport`'s `ConnectTimeout`/`probe` cases). All four `cargo` gates green
+  throughout. **Not yet verified against a real Core** — manual verification (does launch now
+  reach `Paired` immediately; does a stale cached address still fall back to discovery cleanly) is
+  still the user's next step.
+
+- Landed IMPL_UI_SHELL.md's Phase 3.5 (live now-playing/seek/gating data) and finished Phase 3.7's
+  remaining polish steps 3.7.4-3.7.6 (2026-09-11), on `develop`, per the user's explicit choice to do 3.5
+  next (ahead of finishing 3.7's queued polish) now that a real Core connection works, then finish 3.7's
+  remaining steps in the same pass rather than pausing for per-step confirmation as originally planned.
+  See IMPL_UI_SHELL.md's Phase 3.5/3.7 entries for full detail; summary:
+  - **3.5** — `ZoneInfo` (both the `.slint` struct and `core_bridge::to_zone_infos`) now carries
+    `nowPlayingTitle`/`nowPlayingArtist` (from `now_playing.two_line`), `seekPositionSeconds`/
+    `lengthSeconds`/`elapsedLabel`/`remainingLabel`, and the five `is*Allowed` gating flags — three new
+    pure helpers (`now_playing_title`, `now_playing_artist`, `format_time`) do the extraction/formatting.
+    `apply_zone_event`'s `Changed` arm now applies `zones_seek_changed` to the matching zone's
+    `seek_position` instead of discarding it. A real constraint surfaced while building this and was
+    worked around rather than assumed away: `AppWindow.slint`'s imperative code has no general loop or
+    list-search construct at all (verified against the Slint 1.17 compiler's own grammar, not guessed),
+    so picking "the selected zone" out of `zones` by id isn't directly expressible in `.slint`. Fixed
+    with a companion `selectedZoneIndex: int` property and `property <ZoneInfo> currentZone:
+    root.zones[root.selectedZoneIndex];` — a plain index expression, which Slint resolves to a safe
+    default (all-idle) `ZoneInfo` when out of range rather than erroring, per its own documented indexing
+    semantics. `selectedZoneIndex` is kept correct by the zone-switcher popup's row click (sets it
+    immediately from its own loop index) and by `core_bridge::set_zones` (re-resolves it fresh from
+    `selectedZoneId` on every push, so a later list reorder can't leave it stale). The whole transport bar
+    now reads `currentZone.*`; the flat `nowPlayingTitle`/etc. properties Phase 3.2 originally stubbed are
+    removed. Prev/next/play-pause and the seek bar are now genuinely gated by the zone's own
+    `is*Allowed` flags (dimmed + non-interactive when disallowed), closing 3.2's flagged deferral.
+    Remaining-time label format (plain `"3:35"`, no minus sign) is an unsourced implementation-level call,
+    flagged for the user to correct once compared against a real Roon window. 8 new unit tests (126
+    total: 109 `core` + 17 `app`).
+  - **3.7.4-3.7.6** — play/pause icon grown from an ~1.1x to a ~1.5x size ratio versus prev/next (18px→24px
+    triangle, scaled-by-1.5x pause bars, hit-box 32px→36px); both sliders' thumbs recolored white and
+    enlarged 10px→12px; the zone-switcher popup widened 220px→356px (its existing right-aligned `x` anchor
+    needed no change) and its "Pause all" row's icon+label centered (was left-aligned). `.slint`-only, no
+    new tests (126 total, unchanged from 3.5).
+  - All four `cargo` gates green throughout. Ran the built binary directly after each change (8s, no
+    panics/clean exit) — no live Core in this environment, so neither the real now-playing display nor
+    the visual polish could be confirmed end to end; left to the user, who now has a working paired
+    connection to test the whole bar against for the first time.
 - Persisted the pairing token to disk across app restarts (2026-09-11): the user reported that
   every restart of Dissonanza required Enable again in Roon's Extensions UI, and — more
   seriously — created a *new* pending entry each time rather than being recognized as the same

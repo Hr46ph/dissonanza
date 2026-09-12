@@ -21,6 +21,22 @@ use super::message::{MooError, MooMessage};
 /// much shorter one instead of waiting on a real 10s cadence.
 pub(crate) const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(10);
 
+/// Bounds the initial WS connect step (`connect_async`) for a SOOD-discovered address — a safety
+/// net that should practically never trigger, since a fresh SOOD response already confirms the
+/// Core is alive on the LAN right now. Not sourced from `docs/protocol/sood-moo.md` (which doesn't
+/// discuss connect-level timeouts at all) — a deliberately generous judgment call, mirroring
+/// `connection`'s own `KEEPALIVE_TIMEOUT` precedent. Without this, a stale or unreachable address
+/// could otherwise hang on `connect_async` for however long the OS takes to give up on the TCP
+/// handshake, rather than failing fast back into `connection::run`'s existing retry loop.
+pub(crate) const DISCOVERY_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Bounds [`probe`]'s cached-address fast-path attempt, raced against SOOD discovery on process
+/// startup (`connection::mod::resolve_moo_addr`). Deliberately shorter than
+/// `DISCOVERY_CONNECT_TIMEOUT`: a stale cached address should lose that race to discovery
+/// promptly rather than hold it up — discovery is already running concurrently and unaffected
+/// either way.
+pub(crate) const FAST_PATH_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("failed to connect to {addr}: {source}")]
@@ -29,6 +45,8 @@ pub enum TransportError {
         #[source]
         source: WsError,
     },
+    #[error("timed out after {timeout:?} connecting to {addr}")]
+    ConnectTimeout { addr: SocketAddr, timeout: Duration },
     #[error("failed to send a websocket frame: {0}")]
     Send(#[source] WsError),
     #[error("failed to read a websocket frame: {0}")]
@@ -50,9 +68,13 @@ pub enum TransportError {
 /// WS ping is sent every `ping_interval`; if no pong has arrived by the time the next ping is
 /// due, the connection is considered dead. Framing violations (malformed MOO bytes, or a text
 /// frame — MOO never uses those) end the loop immediately rather than trying to resync, per
-/// `docs/protocol/sood-moo.md`.
+/// `docs/protocol/sood-moo.md`. The initial connect itself is bounded by `connect_timeout`
+/// (callers should pass [`DISCOVERY_CONNECT_TIMEOUT`] or a fast-path-specific bound) — everything
+/// after a successful connect is unbounded here, governed by `ping_interval`'s own liveness check
+/// instead.
 pub(crate) async fn run(
     addr: SocketAddr,
+    connect_timeout: Duration,
     ping_interval: Duration,
     mut outbound_rx: mpsc::UnboundedReceiver<MooMessage>,
     inbound_tx: mpsc::UnboundedSender<MooMessage>,
@@ -62,9 +84,14 @@ pub(crate) async fn run(
         return Ok(());
     }
 
-    let (ws_stream, _response) = connect_async(format!("ws://{addr}/api"))
-        .await
-        .map_err(|source| TransportError::Connect { addr, source })?;
+    let (ws_stream, _response) =
+        tokio::time::timeout(connect_timeout, connect_async(format!("ws://{addr}/api")))
+            .await
+            .map_err(|_elapsed| TransportError::ConnectTimeout {
+                addr,
+                timeout: connect_timeout,
+            })?
+            .map_err(|source| TransportError::Connect { addr, source })?;
     let (mut sink, mut stream) = ws_stream.split();
 
     let mut ping_interval = tokio::time::interval(ping_interval);
@@ -137,6 +164,23 @@ pub(crate) async fn run(
     }
 }
 
+/// Probes whether a MOO websocket can be opened at `addr` within `timeout`, closing it
+/// immediately either way — this is only a liveness/reachability check for
+/// `connection::mod::resolve_moo_addr`'s race against SOOD discovery, never a connection used for
+/// anything else (no MOO `REQUEST` is ever sent over it, so it's inert from the Core's
+/// registry/pairing bookkeeping). Keeps the raw `tokio_tungstenite` call localized to this module,
+/// matching `run`'s own role owning all websocket concerns, rather than having `connection::mod`
+/// import it directly.
+pub(crate) async fn probe(addr: SocketAddr, timeout: Duration) -> bool {
+    let Ok(Ok((mut ws_stream, _response))) =
+        tokio::time::timeout(timeout, connect_async(format!("ws://{addr}/api"))).await
+    else {
+        return false;
+    };
+    let _ = ws_stream.close(None).await;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -194,6 +238,7 @@ mod tests {
 
         let client = tokio::spawn(run(
             addr,
+            Duration::from_secs(5),
             Duration::from_secs(30),
             outbound_rx,
             inbound_tx,
@@ -244,6 +289,7 @@ mod tests {
             Duration::from_secs(5),
             run(
                 addr,
+                Duration::from_secs(5),
                 Duration::from_secs(30),
                 outbound_rx,
                 inbound_tx,
@@ -291,6 +337,7 @@ mod tests {
 
         let _client = tokio::spawn(run(
             addr,
+            Duration::from_secs(5),
             Duration::from_secs(30),
             outbound_rx,
             inbound_tx,
@@ -327,6 +374,7 @@ mod tests {
             Duration::from_secs(5),
             run(
                 addr,
+                Duration::from_secs(5),
                 Duration::from_millis(20),
                 outbound_rx,
                 inbound_tx,
@@ -337,6 +385,71 @@ mod tests {
         .expect("run finishes before timeout");
 
         assert!(matches!(result, Err(TransportError::PongTimeout(_))));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_the_peer_never_completes_the_ws_upgrade() {
+        let (addr, listener) = bind_mock_server().await;
+
+        let server = tokio::spawn(async move {
+            let (_tcp, _) = listener.accept().await.expect("accept");
+            // Accept the raw TCP connection but never speak the WS upgrade at all — simulates a
+            // reachable-but-not-actually-Roon address (e.g. a stale cached address some other
+            // service now occupies), as distinct from `missed_pong_closes_connection`'s
+            // already-connected-but-unresponsive-Core case.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        let (_outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+        let (inbound_tx, _inbound_rx) = mpsc::unbounded_channel();
+        let (_stop_tx, stop_rx) = watch::channel(false);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            run(
+                addr,
+                Duration::from_millis(50),
+                Duration::from_secs(30),
+                outbound_rx,
+                inbound_tx,
+                stop_rx,
+            ),
+        )
+        .await
+        .expect("run finishes before the outer test timeout");
+
+        assert!(matches!(
+            result,
+            Err(TransportError::ConnectTimeout { timeout, .. }) if timeout == Duration::from_millis(50)
+        ));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn probe_succeeds_against_a_live_ws_server() {
+        let (addr, listener) = bind_mock_server().await;
+
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.expect("accept");
+            let _ws = accept_async(tcp).await.expect("server handshake");
+            // Nothing else to do — `probe` closes its side right after connecting.
+        });
+
+        assert!(probe(addr, Duration::from_secs(5)).await);
+        server.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn probe_fails_when_the_peer_never_completes_the_ws_upgrade() {
+        let (addr, listener) = bind_mock_server().await;
+
+        let server = tokio::spawn(async move {
+            let (_tcp, _) = listener.accept().await.expect("accept");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        assert!(!probe(addr, Duration::from_millis(50)).await);
         server.abort();
     }
 }

@@ -21,6 +21,7 @@ pub use sood::discovery::DiscoveryError;
 pub use state::{ConnectionEvent, ConnectionState};
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -113,8 +114,13 @@ impl Connection {
     /// their own MOO requests over whichever connection is currently up (IMPL_TRANSPORT.md Phase
     /// 1), and a channel of [`ConnectionEvent`]s reporting its progress. Any other disconnect
     /// (transport closed, keepalive went stale, a step failed) loops back to a fresh
-    /// `Discovering` pass instead of stopping — SOOD discovery starts over from scratch each
-    /// time, so a Core's address is never redialed, per CLAUDE.md's mandatory technical choices.
+    /// `Discovering` pass instead of stopping — every one of those reconnects runs SOOD discovery
+    /// alone, so a Core's address is never redialed on reconnect, per CLAUDE.md's mandatory
+    /// technical choices. Only the very first attempt this process makes is different: if a
+    /// previous run's address was persisted (`pairing_store`), it's raced concurrently against
+    /// that same fresh SOOD discovery pass as a bounded-timeout fast path (IMPL_CONNECTION_FASTPATH.md
+    /// Phase 3) — discovery is never delayed by this and wins any tie, so behavior degrades to
+    /// exactly the no-cache case whenever the cached address is stale.
     pub fn spawn(
         config: ConnectionConfig,
     ) -> (
@@ -150,10 +156,12 @@ async fn run(
     // user (rare); persistence is then silently skipped for this whole run, same as any other
     // load/save failure.
     let pairing_store_path = pairing_store::default_path();
-    let mut saved_token: Option<String> = pairing_store_path
-        .as_deref()
-        .and_then(pairing_store::load)
-        .map(|paired| paired.token);
+    let loaded = pairing_store_path.as_deref().and_then(pairing_store::load);
+    let mut saved_token: Option<String> = loaded.as_ref().map(|paired| paired.token.clone());
+    // Only this process's very first connection attempt races this address against a fresh SOOD
+    // discovery pass (`resolve_moo_addr`) — `.take()` below means every later reconnect gets
+    // `None` and runs discovery alone, per CLAUDE.md's disconnect-always-rediscovers rule.
+    let mut fast_path_addr: Option<SocketAddr> = loaded.and_then(|paired| paired.cached_addr);
     loop {
         send_state(&event_tx, ConnectionState::Discovering);
 
@@ -164,6 +172,7 @@ async fn run(
             &requests_tx,
             &mut saved_token,
             pairing_store_path.as_deref(),
+            fast_path_addr.take(),
         )
         .await
         {
@@ -191,6 +200,9 @@ async fn run(
 /// the transport closed on its own with no error); `Err` means a step failed and should be
 /// surfaced before `run` reports `Disconnected`. Either way, `run` (the caller) decides whether
 /// to loop back to `Discovering` or stop, based on `shutdown_rx`'s value once this returns.
+/// `fast_path_addr` is only ever `Some` on `run`'s first call (see its own comment) — every
+/// reconnect passes `None`, so `resolve_moo_addr` runs discovery alone then, unchanged from
+/// before the fast path existed.
 async fn run_until_disconnected(
     config: &ConnectionConfig,
     event_tx: &mpsc::UnboundedSender<ConnectionEvent>,
@@ -198,9 +210,10 @@ async fn run_until_disconnected(
     requests_tx: &watch::Sender<Option<CommandTx>>,
     saved_token: &mut Option<String>,
     pairing_store_path: Option<&Path>,
+    fast_path_addr: Option<SocketAddr>,
 ) -> Result<(), ConnectionError> {
-    let Some(core) = discover_first_core(shutdown_rx).await? else {
-        return Ok(()); // shutdown requested before any Core was found
+    let Some(moo_addr) = resolve_moo_addr(shutdown_rx, fast_path_addr).await? else {
+        return Ok(()); // shutdown requested before any address was found
     };
 
     send_state(event_tx, ConnectionState::Connecting);
@@ -209,7 +222,8 @@ async fn run_until_disconnected(
     let (inbound_tx, mut inbound_rx) = mpsc::unbounded_channel::<MooMessage>();
     let (transport_stop_tx, transport_stop_rx) = watch::channel(false);
     let transport_task = tokio::spawn(transport::run(
-        core.moo_addr(),
+        moo_addr,
+        transport::DISCOVERY_CONNECT_TIMEOUT,
         transport::DEFAULT_PING_INTERVAL,
         outbound_rx,
         inbound_tx,
@@ -250,6 +264,10 @@ async fn run_until_disconnected(
             &PairedCore {
                 core_id: registered.core_id.clone(),
                 token: registered.token.clone(),
+                // Reflects whatever address actually worked this time, regardless of whether it
+                // won the race via the fast-path probe or via discovery — self-healing if the
+                // Core's address changes.
+                cached_addr: Some(moo_addr),
             },
         );
     }
@@ -416,16 +434,56 @@ async fn stop_transport_and_finish(
     Ok(())
 }
 
-/// Waits for the first Core SOOD discovery finds and stops discovery once one arrives, or
-/// returns `None` if `shutdown_rx` fired first. A discovery error is only surfaced if no
-/// candidate was found before discovery ended — once we have a candidate we've moved on to
-/// using it, and no longer care why discovery itself later exits.
-async fn discover_first_core(
+/// Awaits `probe_task`'s result — a bounded liveness probe of a cached address, raced against
+/// discovery in [`resolve_moo_addr`] below — or pends forever once there's nothing left to await
+/// (no probe was started, or it already resolved once). Mirrors `app/src/core_bridge.rs`'s
+/// `recv_zone_event` "await forever while absent" pattern for an analogous optional `select!`
+/// branch. Consumes `probe_task` on its very first resolution either way (success, failure, or a
+/// join error), so a losing probe is never re-polled and can never win the race on a later loop
+/// iteration.
+async fn await_probe(probe_task: &mut Option<(SocketAddr, JoinHandle<bool>)>) -> SocketAddr {
+    match probe_task.take() {
+        Some((addr, handle)) => match handle.await {
+            Ok(true) => addr,
+            _ => std::future::pending().await,
+        },
+        None => std::future::pending().await,
+    }
+}
+
+/// Resolves the address to open the MOO websocket at, racing a bounded liveness probe of
+/// `fast_path_addr` (if any) concurrently against a fresh SOOD discovery pass — whichever
+/// produces a live address first wins. Returns `None` if `shutdown_rx` fired before either did.
+///
+/// Discovery is never delayed or deprioritized by the probe: it's spawned unconditionally and
+/// wins any tie or overlap, since SOOD is the protocol's actual source of truth (a discovery
+/// response means a real Core just answered, right now, at that address) — the probe only exists
+/// to occasionally beat discovery's multicast round-trip when the cached address still works. If
+/// discovery wins while the probe is still in flight, the probe's `JoinHandle` is simply
+/// `abort()`-ed — its only side effect is a bare WS open+close that never sends a MOO `REQUEST`,
+/// so cancelling it has no cleanup to do. Racing only up to "is this address reachable and
+/// speaking MOO," rather than all the way through registration, avoids ever running two
+/// concurrent `registry:1/register` handshakes against the same Core with the same token, which
+/// the cached address and discovery will very often turn out to be (multi-Core is a permanent
+/// non-goal, per NORTH-STAR.md).
+///
+/// A discovery error is only surfaced if nothing won the race at all — once either side has a
+/// candidate, we've moved on to using it, same rule this function's `discover_first_core`
+/// predecessor already applied.
+async fn resolve_moo_addr(
     shutdown_rx: &mut watch::Receiver<bool>,
-) -> Result<Option<DiscoveredCore>, ConnectionError> {
+    fast_path_addr: Option<SocketAddr>,
+) -> Result<Option<SocketAddr>, ConnectionError> {
     let (discovered_tx, mut discovered_rx) = mpsc::unbounded_channel();
-    let (stop_tx, stop_rx) = watch::channel(false);
-    let task = tokio::spawn(discovery::run(discovered_tx, stop_rx));
+    let (discovery_stop_tx, discovery_stop_rx) = watch::channel(false);
+    let discovery_task = tokio::spawn(discovery::run(discovered_tx, discovery_stop_rx));
+
+    let mut probe_task = fast_path_addr.map(|addr| {
+        (
+            addr,
+            tokio::spawn(transport::probe(addr, transport::FAST_PATH_CONNECT_TIMEOUT)),
+        )
+    });
 
     let found = loop {
         tokio::select! {
@@ -434,13 +492,19 @@ async fn discover_first_core(
                     break None;
                 }
             }
-            maybe_core = discovered_rx.recv() => break maybe_core,
+            addr = await_probe(&mut probe_task) => break Some(addr),
+            maybe_core = discovered_rx.recv() => {
+                break maybe_core.map(|core: DiscoveredCore| core.moo_addr());
+            }
         }
     };
 
-    let _ = stop_tx.send(true);
-    match (found, task.await) {
-        (Some(core), _) => Ok(Some(core)),
+    let _ = discovery_stop_tx.send(true);
+    if let Some((_, handle)) = probe_task {
+        handle.abort();
+    }
+    match (found, discovery_task.await) {
+        (Some(addr), _) => Ok(Some(addr)),
         (None, Ok(Ok(()))) => Ok(None),
         (None, Ok(Err(err))) => Err(err.into()),
         (None, Err(_join_err)) => Ok(None),

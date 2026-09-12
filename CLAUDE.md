@@ -47,7 +47,7 @@ A Cargo workspace with two crates: `core/` (Roon MOO/SOOD protocol client, all b
 
 ## Mandatory technical choices
 
-- Never hardcode a Roon Core's IP/port. Always rediscover via SOOD — the port isn't fixed and can change.
+- Never hardcode a Roon Core's IP/port in source. A persisted last-known address may be raced concurrently against SOOD discovery at process startup as a bounded-timeout fast path — but discovery always runs alongside it and wins on any tie or overlap, since the port isn't fixed and can change and SOOD is the protocol's actual source of truth.
 - Never reach into Roon's internal/unofficial protocol surface (Settings, Audio Setup, Zone config, DSP engine). Only the officially-supported API modules are in scope, full stop — see NORTH-STAR.md's non-goals.
 - On Roon Core disconnect, wait for a new SOOD discovery event rather than retrying the last known address.
 - Maintain an app-level keepalive/health-check on top of Roon's `core_paired`/`core_unpaired` events — that pair is known to not always fire `core_unpaired` correctly on its own.

@@ -18,15 +18,23 @@
 //! operations — not worth the extra complexity of async file I/O for a sub-millisecond,
 //! infrequent read/write on this app's single background-thread runtime.
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// The pairing token issued by the Core that last successfully registered this extension.
+/// The pairing token issued by the Core that last successfully registered this extension, plus
+/// the MOO address that last succeeded.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct PairedCore {
     pub core_id: String,
     pub token: String,
+    /// The `ws://<addr>/api` address used the last time registration succeeded — raced against a
+    /// fresh SOOD discovery pass on process startup (`connection/mod.rs`'s `run`) as a
+    /// bounded-timeout fast path, per CLAUDE.md's mandatory technical choices. `#[serde(default)]`
+    /// so a file saved before this field existed still loads fine, just with nothing to race.
+    #[serde(default)]
+    pub cached_addr: Option<SocketAddr>,
 }
 
 /// The on-disk path this extension's pairing state lives at, or `None` if it can't be
@@ -84,12 +92,48 @@ mod tests {
         let paired = PairedCore {
             core_id: "core-1".to_string(),
             token: "tok-1".to_string(),
+            cached_addr: None,
         };
 
         save(&path, &paired).expect("saves");
         let loaded = load(&path).expect("loads what was just saved");
 
         assert_eq!(loaded, paired);
+        std::fs::remove_file(&path).expect("cleanup");
+    }
+
+    #[test]
+    fn round_trips_a_cached_addr() {
+        let path = temp_path("round-trip-addr");
+        let paired = PairedCore {
+            core_id: "core-1".to_string(),
+            token: "tok-1".to_string(),
+            cached_addr: Some("192.168.1.50:9330".parse().unwrap()),
+        };
+
+        save(&path, &paired).expect("saves");
+        let loaded = load(&path).expect("loads what was just saved");
+
+        assert_eq!(loaded, paired);
+        std::fs::remove_file(&path).expect("cleanup");
+    }
+
+    #[test]
+    fn load_defaults_cached_addr_when_absent_from_older_files() {
+        let path = temp_path("no-cached-addr");
+        std::fs::write(&path, br#"{"core_id":"core-1","token":"tok-1"}"#)
+            .expect("write file without cached_addr, as an older version of this app would have");
+
+        let loaded = load(&path).expect("loads despite the missing field");
+
+        assert_eq!(
+            loaded,
+            PairedCore {
+                core_id: "core-1".to_string(),
+                token: "tok-1".to_string(),
+                cached_addr: None,
+            }
+        );
         std::fs::remove_file(&path).expect("cleanup");
     }
 
@@ -117,6 +161,7 @@ mod tests {
         let paired = PairedCore {
             core_id: "core-1".to_string(),
             token: "tok-1".to_string(),
+            cached_addr: None,
         };
 
         save(&path, &paired).expect("creates parent dirs and saves");
